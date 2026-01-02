@@ -4,10 +4,17 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies and ffmpeg (static binary for faster build)
 RUN apt-get update && apt-get install -y \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    xz-utils \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz \
+    && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp \
+    && cp /tmp/ffmpeg-*-amd64-static/ffmpeg /usr/local/bin/ \
+    && cp /tmp/ffmpeg-*-amd64-static/ffprobe /usr/local/bin/ \
+    && rm -rf /tmp/ffmpeg* \
+    && chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
 
 # Copy requirements first for better caching
 COPY requirements.txt .
@@ -33,11 +40,11 @@ EXPOSE 5167
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:5167/get-meetings || exit 1
 
-# Create non-root user for security
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
-
 # Install gosu for safe user switching
 RUN apt-get update && apt-get install -y gosu && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for security
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 
 # Create entrypoint script to fix permissions at runtime
 RUN echo '#!/bin/bash\n\

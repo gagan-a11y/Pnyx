@@ -102,7 +102,7 @@ export class Analytics {
     }
   }
 
-  // Enhanced user tracking methods for Phase 1
+  // Enhanced user tracking methods for session management
   static async startSession(userId: string): Promise<string | null> {
     if (!this.initialized) {
       console.warn('Analytics not initialized');

@@ -6,11 +6,10 @@ import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
 import type { CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
 import { ConfirmationModal } from '../ConfirmationModel/confirmation-modal';
-import {  ModelConfig } from '@/components/ModelSettingsModal';
+import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SettingTabs } from '../SettingTabs';
 import { TranscriptModelProps } from '@/components/TranscriptSettings';
 import Analytics from '@/lib/analytics';
-import { invoke } from '@tauri-apps/api/core';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from 'sonner';
 
@@ -106,20 +105,12 @@ const Sidebar: React.FC = () => {
       }
 
       try {
-        const data = await invoke('api_get_model_config') as any;
-        if (data && data.provider !== null) {
-          // Fetch API key if not included and provider requires it
-          if (data.provider !== 'ollama' && !data.apiKey) {
-            try {
-              const apiKeyData = await invoke('api_get_api_key', {
-                provider: data.provider
-              }) as string;
-              data.apiKey = apiKeyData;
-            } catch (err) {
-              console.error('Failed to fetch API key:', err);
-            }
+        const response = await fetch(`${serverAddress}/api/model-config`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.provider !== null) {
+            setModelConfig(data);
           }
-          setModelConfig(data);
         }
       } catch (error) {
         console.error('Failed to fetch model config:', error);
@@ -140,9 +131,12 @@ const Sidebar: React.FC = () => {
       }
 
       try {
-        const data = await invoke('api_get_transcript_config') as any;
-        if (data && data.provider !== null) {
-          setTranscriptModelConfig(data);
+        const response = await fetch(`${serverAddress}/api/transcript-config`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.provider !== null) {
+            setTranscriptModelConfig(data);
+          }
         }
       } catch (error) {
         console.error('Failed to fetch transcript settings:', error);
@@ -152,48 +146,26 @@ const Sidebar: React.FC = () => {
   }, [serverAddress]);
 
   // Listen for model config updates from other components
-  useEffect(() => {
-    const setupListener = async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      const unlisten = await listen<ModelConfig>('model-config-updated', (event) => {
-        console.log('Sidebar received model-config-updated event:', event.payload);
-        setModelConfig(event.payload);
-      });
+  // REMOVED TAURI LISTENER
 
-      return unlisten;
-    };
 
-    let cleanup: (() => void) | undefined;
-    setupListener().then(fn => cleanup = fn);
-
-    return () => {
-      cleanup?.();
-    };
-  }, []);
-  
-  
-  
   // Handle model config save
   const handleSaveModelConfig = async (config: ModelConfig) => {
     try {
-      await invoke('api_save_model_config', {
-        provider: config.provider,
-        model: config.model,
-        whisperModel: config.whisperModel,
-        apiKey: config.apiKey,
-        ollamaEndpoint: config.ollamaEndpoint,
+      const response = await fetch(`${serverAddress}/api/model-config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
       });
+
+      if (!response.ok) throw new Error('Failed to save config');
 
       setModelConfig(config);
       console.log('Model config saved successfully');
       setSettingsSaveSuccess(true);
 
-      // Emit event to sync other components
-      const { emit } = await import('@tauri-apps/api/event');
-      await emit('model-config-updated', config);
-
       // Track settings change
-      await Analytics.trackSettingsChanged('model_config', `${config.provider}_${config.model}`);
+      Analytics.trackSettingsChanged('model_config', `${config.provider}_${config.model}`);
     } catch (error) {
       console.error('Error saving model config:', error);
       setSettingsSaveSuccess(false);
@@ -203,41 +175,35 @@ const Sidebar: React.FC = () => {
   const handleSaveTranscriptConfig = async (updatedConfig?: TranscriptModelProps) => {
     try {
       const configToSave = updatedConfig || transcriptModelConfig;
-      const payload = {
-        provider: configToSave.provider,
-        model: configToSave.model,
-        apiKey: configToSave.apiKey ?? null
-      };
-      console.log('Saving transcript config with payload:', payload);
-      
-      await invoke('api_save_transcript_config', {
-        provider: payload.provider,
-        model: payload.model,
-        apiKey: payload.apiKey,
+      const response = await fetch(`${serverAddress}/api/transcript-config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(configToSave)
       });
 
-      
+      if (!response.ok) throw new Error('Failed to save transcript config');
+
       setSettingsSaveSuccess(true);
-      
+
       // Track settings change
       const transcriptConfigToSave = updatedConfig || transcriptModelConfig;
-      await Analytics.trackSettingsChanged('transcript_config', `${transcriptConfigToSave.provider}_${transcriptConfigToSave.model}`);
+      Analytics.trackSettingsChanged('transcript_config', `${transcriptConfigToSave.provider}_${transcriptConfigToSave.model}`);
     } catch (error) {
       console.error('Failed to save transcript config:', error);
       setSettingsSaveSuccess(false);
     }
   };
-  
+
   // Handle search input changes
   const handleSearchChange = useCallback(async (value: string) => {
     setSearchQuery(value);
-    
+
     // If search query is empty, just return to normal view
     if (!value.trim()) return;
-    
+
     // Search through transcripts
     await searchTranscripts(value);
-    
+
     // Make sure the meetings folder is expanded when searching
     if (!expandedFolders.has('meetings')) {
       const newExpanded = new Set(expandedFolders);
@@ -245,41 +211,41 @@ const Sidebar: React.FC = () => {
       setExpandedFolders(newExpanded);
     }
   }, [expandedFolders, searchTranscripts]);
-  
+
   // Combine search results with sidebar items
   const filteredSidebarItems = useMemo(() => {
     if (!searchQuery.trim()) return sidebarItems;
-    
+
     // If we have search results, highlight matching meetings
     if (searchResults.length > 0) {
       // Get the IDs of meetings that matched in transcripts
       const matchedMeetingIds = new Set(searchResults.map(result => result.id));
-      
+
       return sidebarItems
         .map(folder => {
           // Always include folders in the results
           if (folder.type === 'folder') {
             if (!folder.children) return folder;
-            
+
             // Filter children based on search results or title match
             const filteredChildren = folder.children.filter(item => {
               // Include if the meeting ID is in our search results
               if (matchedMeetingIds.has(item.id)) return true;
-              
+
               // Or if the title matches the search query
               return item.title.toLowerCase().includes(searchQuery.toLowerCase());
             });
-            
+
             return {
               ...folder,
               children: filteredChildren
             };
           }
-          
+
           // For non-folder items, check if they match the search
-          return (matchedMeetingIds.has(folder.id) || 
-                 folder.title.toLowerCase().includes(searchQuery.toLowerCase())) 
-                 ? folder : undefined;
+          return (matchedMeetingIds.has(folder.id) ||
+            folder.title.toLowerCase().includes(searchQuery.toLowerCase()))
+            ? folder : undefined;
         })
         .filter((item): item is SidebarItem => item !== undefined); // Type-safe filter
     } else {
@@ -289,18 +255,18 @@ const Sidebar: React.FC = () => {
           // Always include folders in the results
           if (folder.type === 'folder') {
             if (!folder.children) return folder;
-            
+
             // Filter children based on search query
-            const filteredChildren = folder.children.filter(item => 
+            const filteredChildren = folder.children.filter(item =>
               item.title.toLowerCase().includes(searchQuery.toLowerCase())
             );
-            
+
             return {
               ...folder,
               children: filteredChildren
             };
           }
-          
+
           // For non-folder items, check if they match the search
           return folder.title.toLowerCase().includes(searchQuery.toLowerCase()) ? folder : undefined;
         })
@@ -314,16 +280,18 @@ const Sidebar: React.FC = () => {
     const payload = {
       meetingId: itemId
     };
-    
-    try{
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('api_delete_meeting', {
-        meetingId: itemId,
+
+    try {
+      const response = await fetch(`${serverAddress}/api/meetings/${itemId}`, {
+        method: 'DELETE',
       });
+
+      if (!response.ok) throw new Error('Failed to delete meeting');
+
       console.log('Meeting deleted successfully');
       const updatedMeetings = meetings.filter((m: CurrentMeeting) => m.id !== itemId);
       setMeetings(updatedMeetings);
-      
+
       // Track meeting deletion
       Analytics.trackMeetingDeleted(itemId);
 
@@ -344,7 +312,7 @@ const Sidebar: React.FC = () => {
       });
     }
   };
-  
+
   const handleDeleteConfirm = () => {
     if (deleteModalState.itemId) {
       handleDelete(deleteModalState.itemId);
@@ -375,10 +343,15 @@ const Sidebar: React.FC = () => {
     }
 
     try {
-      await invoke('api_save_meeting_title', {
-        meetingId: meetingId,
-        title: newTitle,
+      const response = await fetch(`${serverAddress}/api/meetings/${meetingId}/title`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ title: newTitle }),
       });
+
+      if (!response.ok) throw new Error('Failed to update meeting title');
 
       // Update local state
       const updatedMeetings = meetings.map((m: CurrentMeeting) =>
@@ -451,9 +424,8 @@ const Sidebar: React.FC = () => {
             <TooltipTrigger asChild>
               <button
                 onClick={() => router.push('/')}
-                className={`p-2 rounded-lg transition-colors duration-150 ${
-                  isHomePage ? 'bg-gray-100' : 'hover:bg-gray-100'
-                }`}
+                className={`p-2 rounded-lg transition-colors duration-150 ${isHomePage ? 'bg-gray-100' : 'hover:bg-gray-100'
+                  }`}
               >
                 <Home className="w-5 h-5 text-gray-600" />
               </button>
@@ -489,9 +461,8 @@ const Sidebar: React.FC = () => {
                   if (isCollapsed) toggleCollapse();
                   toggleFolder('meetings');
                 }}
-                className={`p-2 rounded-lg transition-colors duration-150 ${
-                  isMeetingPage ? 'bg-gray-100' : 'hover:bg-gray-100'
-                }`}
+                className={`p-2 rounded-lg transition-colors duration-150 ${isMeetingPage ? 'bg-gray-100' : 'hover:bg-gray-100'
+                  }`}
               >
                 <Calendar className="w-5 h-5 text-gray-600" />
               </button>
@@ -505,9 +476,8 @@ const Sidebar: React.FC = () => {
             <TooltipTrigger asChild>
               <button
                 onClick={() => router.push('/settings')}
-                className={`p-2 rounded-lg transition-colors duration-150 ${
-                  isSettingsPage ? 'bg-gray-100' : 'hover:bg-gray-100'
-                }`}
+                className={`p-2 rounded-lg transition-colors duration-150 ${isSettingsPage ? 'bg-gray-100' : 'hover:bg-gray-100'
+                  }`}
               >
                 <Settings className="w-5 h-5 text-gray-600" />
               </button>
@@ -544,14 +514,12 @@ const Sidebar: React.FC = () => {
     return (
       <div key={item.id}>
         <div
-          className={`flex items-center transition-all duration-150 group ${
-            item.type === 'folder' && depth === 0
-              ? 'p-3 text-lg font-semibold h-10 mx-3 mt-3 rounded-lg'
-              : `px-3 py-2 my-0.5 rounded-md text-sm ${
-                  isActive ? 'bg-blue-100 text-blue-700 font-medium' :
-                  hasTranscriptMatch ? 'bg-yellow-50' : 'hover:bg-gray-50'
-                } cursor-pointer`
-          }`}
+          className={`flex items-center transition-all duration-150 group ${item.type === 'folder' && depth === 0
+            ? 'p-3 text-lg font-semibold h-10 mx-3 mt-3 rounded-lg'
+            : `px-3 py-2 my-0.5 rounded-md text-sm ${isActive ? 'bg-blue-100 text-blue-700 font-medium' :
+              hasTranscriptMatch ? 'bg-yellow-50' : 'hover:bg-gray-50'
+            } cursor-pointer`
+            }`}
           style={item.type === 'folder' && depth === 0 ? {} : { paddingLeft }}
           onClick={() => {
             if (item.type === 'folder') {
@@ -621,7 +589,7 @@ const Sidebar: React.FC = () => {
                   </div>
                 )}
               </div>
-              
+
               {/* Show transcript match snippet if available */}
               {hasTranscriptMatch && (
                 <div className="mt-1 ml-8 text-xs text-gray-500 bg-yellow-50 p-1.5 rounded border border-yellow-100 line-clamp-2">
@@ -655,18 +623,17 @@ const Sidebar: React.FC = () => {
         )}
       </button>
 
-      <div 
-        className={`h-screen bg-white border-r shadow-sm flex flex-col transition-all duration-300 ${
-          isCollapsed ? 'w-16' : 'w-64'
-        }`}
+      <div
+        className={`h-screen bg-white border-r shadow-sm flex flex-col transition-all duration-300 ${isCollapsed ? 'w-16' : 'w-64'
+          }`}
       >
         {/* Header with traffic light spacing */}
         <div className="flex-shrink-0 h-22 flex items-center">
-        
+
           {/* Title container */}
-          
-          
-          
+
+
+
           <div className="flex-1">
             {!isCollapsed && (
               <div className="p-3">
@@ -674,29 +641,29 @@ const Sidebar: React.FC = () => {
                   <span>Meetily</span>
                 </span> */}
                 <Logo isCollapsed={isCollapsed} />
-                
+
                 <div className="relative mb-1">
-              <div className="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">
-                <Search className="h-3.5 w-3.5 text-gray-400" />
+                  <div className="absolute inset-y-0 left-0 pl-2 flex items-center pointer-events-none">
+                    <Search className="h-3.5 w-3.5 text-gray-400" />
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Search meeting content..."
+                    value={searchQuery}
+                    onChange={(e) => handleSearchChange(e.target.value)}
+                    className="block w-full pl-8 pr-3 py-1.5 border border-gray-200 rounded-md text-xs placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => handleSearchChange('')}
+                      className="absolute inset-y-0 right-0 pr-2 flex items-center text-gray-400 hover:text-gray-500"
+                    >
+                      <span className="text-xs">×</span>
+                    </button>
+                  )}
+                </div>
+
               </div>
-              <input
-                type="text"
-                placeholder="Search meeting content..."
-                value={searchQuery}
-                onChange={(e) => handleSearchChange(e.target.value)}
-                className="block w-full pl-8 pr-3 py-1.5 border border-gray-200 rounded-md text-xs placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => handleSearchChange('')}
-                  className="absolute inset-y-0 right-0 pr-2 flex items-center text-gray-400 hover:text-gray-500"
-                >
-                  <span className="text-xs">×</span>
-                </button>
-              )}
-            </div>
-           
-            </div>
             )}
           </div>
         </div>
@@ -706,7 +673,7 @@ const Sidebar: React.FC = () => {
           {/* Fixed navigation items */}
           <div className="flex-shrink-0">
             {!isCollapsed && (
-              <div 
+              <div
                 onClick={() => router.push('/')}
                 className="p-3  text-lg font-semibold items-center hover:bg-gray-100 h-10   flex mx-3 mt-3 rounded-lg cursor-pointer"
               >
@@ -715,7 +682,7 @@ const Sidebar: React.FC = () => {
               </div>
             )}
           </div>
-          
+
           {/* Content area */}
           <div className="flex-1 flex flex-col min-h-0">
             {renderCollapsedIcons()}
@@ -737,7 +704,7 @@ const Sidebar: React.FC = () => {
                 ))}
               </div>
             )}
-            
+
             {/* Scrollable meeting items */}
             {!isCollapsed && (
               <div className="flex-1 overflow-y-auto custom-scrollbar min-h-0">
@@ -755,35 +722,35 @@ const Sidebar: React.FC = () => {
 
         {/* Footer */}
         {!isCollapsed && (
-          
+
           <div className="flex-shrink-0 p-2 border-t border-gray-100">
             <button
-                onClick={handleRecordingToggle}
-                disabled={isRecording}
-                className={`w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-white ${isRecording ? 'bg-red-300 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600'} rounded-lg transition-colors shadow-sm`}
-              >
-                {isRecording ? (
-                  <>
-                    <Square className="w-4 h-4 mr-2" />
-                    <span>Recording in progress...</span>
-                  </>
-                ) : (
-                  <>
-                    <Mic className="w-4 h-4 mr-2" />
-                    <span>Start Recording</span>
-                  </>
-                )}
-              </button>
-        
-              <button
-                onClick={() => router.push('/settings')}
-                className="w-full flex items-center justify-center px-3 py-1.5 mt-1 mb-1 text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors shadow-sm"
-              >
-                <Settings className="w-4 h-4 mr-2" />
-                <span>Settings</span>
-              </button>
-              <Info isCollapsed={isCollapsed} />
-              <div className="w-full flex items-center justify-center px-3 py-1 text-xs text-gray-400">
+              onClick={handleRecordingToggle}
+              disabled={isRecording}
+              className={`w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-white ${isRecording ? 'bg-red-300 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600'} rounded-lg transition-colors shadow-sm`}
+            >
+              {isRecording ? (
+                <>
+                  <Square className="w-4 h-4 mr-2" />
+                  <span>Recording in progress...</span>
+                </>
+              ) : (
+                <>
+                  <Mic className="w-4 h-4 mr-2" />
+                  <span>Start Recording</span>
+                </>
+              )}
+            </button>
+
+            <button
+              onClick={() => router.push('/settings')}
+              className="w-full flex items-center justify-center px-3 py-1.5 mt-1 mb-1 text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg transition-colors shadow-sm"
+            >
+              <Settings className="w-4 h-4 mr-2" />
+              <span>Settings</span>
+            </button>
+            <Info isCollapsed={isCollapsed} />
+            <div className="w-full flex items-center justify-center px-3 py-1 text-xs text-gray-400">
               v0.1.1 - Pre Release
             </div>
           </div>

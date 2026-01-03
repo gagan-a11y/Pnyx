@@ -148,27 +148,9 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
 
   // Listen for speech-detected event
   useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
-
-    const setupListener = async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      unsubscribe = await listen<SpeechDetectedEvent>('speech-detected', () => {
-        setSpeechDetected(true);
-      });
-    };
-
-    if (isRecording) {
-      setupListener();
-    } else {
-      // Reset when not recording
-      setSpeechDetected(false);
-    }
-
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
+    // For web version, we might use a websocket or just omit this for now.
+    // The visualizer usually gets this from the audio stream directly in web.
+    setSpeechDetected(false);
   }, [isRecording]);
 
   // Streaming effect: animate new transcripts character-by-character
@@ -255,7 +237,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
       <AnimatePresence>
         {isRecording && (
           <div className="sticky top-4 z-10 bg-white pb-2">
-            <RecordingStatusBar isPaused={isPaused} />
+            <RecordingStatusBar isPaused={isPaused} isRecording={isRecording} />
           </div>
         )}
       </AnimatePresence>

@@ -2,8 +2,6 @@ import React, { useContext, useState } from 'react';
 import { Switch } from '@/components/ui/switch';
 import { Info, Loader2 } from 'lucide-react';
 import { AnalyticsContext } from './AnalyticsProvider';
-import { load } from '@tauri-apps/plugin-store';
-import { invoke } from '@tauri-apps/api/core';
 import { Analytics } from '@/lib/analytics';
 import AnalyticsDataModal from './AnalyticsDataModal';
 
@@ -21,7 +19,7 @@ export default function AnalyticsConsentSwitch() {
       setShowModal(true);
       // Track that user viewed the transparency modal
       try {
-        await invoke('track_analytics_transparency_viewed');
+        Analytics.track('analytics_transparency_viewed');
       } catch (error) {
         console.error('Failed to track transparency view:', error);
       }
@@ -38,14 +36,7 @@ export default function AnalyticsConsentSwitch() {
     setIsProcessing(true);
 
     try {
-      const store = await load('analytics.json', {
-        autoSave: false,
-        defaults: {
-          analyticsOptedIn: true
-        }
-      });
-      await store.set('analyticsOptedIn', enabled);
-      await store.save();
+      localStorage.setItem('analytics_opted_in', String(enabled));
 
       if (enabled) {
         // Full analytics initialization (same as AnalyticsProvider)
@@ -57,7 +48,7 @@ export default function AnalyticsConsentSwitch() {
         // Identify user with enhanced properties immediately after init
         await Analytics.identify(userId, {
           app_version: '0.1.1',
-          platform: 'tauri',
+          platform: 'web',
           first_seen: new Date().toISOString(),
           os: navigator.platform,
           user_agent: navigator.userAgent,
@@ -71,7 +62,7 @@ export default function AnalyticsConsentSwitch() {
 
         // Track that user enabled analytics
         try {
-          await invoke('track_analytics_enabled');
+          Analytics.track('analytics_enabled');
         } catch (error) {
           console.error('Failed to track analytics enabled:', error);
         }
@@ -80,7 +71,7 @@ export default function AnalyticsConsentSwitch() {
       } else {
         // Track that user disabled analytics BEFORE disabling
         try {
-          await invoke('track_analytics_disabled');
+          Analytics.track('analytics_disabled');
         } catch (error) {
           console.error('Failed to track analytics disabled:', error);
         }
@@ -108,9 +99,9 @@ export default function AnalyticsConsentSwitch() {
     // Keep analytics enabled, no state change needed
   };
 
-  const handlePrivacyPolicyClick = async () => {
+  const handlePrivacyPolicyClick = () => {
     try {
-      await invoke('open_external_url', { url: 'https://github.com/Zackriya-Solutions/meeting-minutes/blob/main/PRIVACY_POLICY.md' });
+      window.open('https://github.com/Zackriya-Solutions/meeting-minutes/blob/main/PRIVACY_POLICY.md', '_blank');
     } catch (error) {
       console.error('Failed to open privacy policy link:', error);
     }

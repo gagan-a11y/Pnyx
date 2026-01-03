@@ -5,7 +5,6 @@ import { Transcript, Summary } from "@/types";
 import PageContent from "./page-content";
 import { useRouter, useSearchParams } from "next/navigation";
 import Analytics from "@/lib/analytics";
-import { invoke } from "@tauri-apps/api/core";
 import { LoaderIcon } from "lucide-react";
 
 interface MeetingDetailsResponse {
@@ -19,7 +18,7 @@ interface MeetingDetailsResponse {
 function MeetingDetailsContent() {
   const searchParams = useSearchParams();
   const meetingId = searchParams.get('id');
-  const { setCurrentMeeting, refetchMeetings } = useSidebar();
+  const { setCurrentMeeting, refetchMeetings, serverAddress } = useSidebar();
   const router = useRouter();
   const [meetingDetails, setMeetingDetails] = useState<MeetingDetailsResponse | null>(null);
   const [meetingSummary, setMeetingSummary] = useState<Summary | null>(null);
@@ -31,7 +30,10 @@ function MeetingDetailsContent() {
   // Check if gemma3:1b model is available in Ollama
   const checkForGemmaModel = useCallback(async (): Promise<boolean> => {
     try {
-      const models = await invoke('get_ollama_models', { endpoint: null }) as any[];
+      const response = await fetch('http://localhost:11434/api/tags');
+      if (!response.ok) throw new Error('Failed to fetch models');
+      const data = await response.json();
+      const models = data.models || [];
       const hasGemma = models.some((m: any) => m.name === 'gemma3:1b');
       console.log('🔍 Checked for gemma3:1b:', hasGemma);
       return hasGemma;
@@ -46,8 +48,10 @@ function MeetingDetailsContent() {
     if (hasCheckedAutoGen) return; // Only check once
 
     try {
+      if (!serverAddress) return;
       // ✅ STEP 1: Check what's currently in database
-      const currentConfig = await invoke('api_get_model_config') as any;
+      const configResponse = await fetch(`${serverAddress}/get-model-config`);
+      const currentConfig = await configResponse.json();
 
       // ✅ STEP 2: If DB already has a model, use it (never override!)
       if (currentConfig && currentConfig.model) {
@@ -63,12 +67,15 @@ function MeetingDetailsContent() {
       if (hasGemma) {
         console.log('💾 DB empty, using gemma3:1b as initial default');
 
-        await invoke('api_save_model_config', {
-          provider: 'ollama',
-          model: 'gemma3:1b',
-          whisperModel: 'large-v3',
-          apiKey: null,
-          ollamaEndpoint: null,
+        await fetch(`${serverAddress}/save-model-config`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            provider: 'ollama',
+            model: 'gemma3:1b',
+            whisperModel: 'large-v3',
+            apiKey: null
+          })
         });
 
         setShouldAutoGenerate(true);
@@ -80,7 +87,7 @@ function MeetingDetailsContent() {
     }
 
     setHasCheckedAutoGen(true);
-  }, [hasCheckedAutoGen, checkForGemmaModel]);
+  }, [hasCheckedAutoGen, checkForGemmaModel, serverAddress]);
 
   // Extract fetchMeetingDetails so it can be called from child components
   const fetchMeetingDetails = useCallback(async () => {
@@ -89,9 +96,16 @@ function MeetingDetailsContent() {
     }
 
     try {
-      const data = await invoke('api_get_meeting', {
-        meetingId: meetingId,
-      }) as any;
+      // serverAddress might be empty initially
+      if (!serverAddress) return;
+
+      const response = await fetch(`${serverAddress}/get-meeting/${meetingId}`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+
+
       console.log('Meeting details:', data);
       setMeetingDetails(data);
 
@@ -101,7 +115,7 @@ function MeetingDetailsContent() {
       console.error('Error fetching meeting details:', error);
       setError("Failed to load meeting details");
     }
-  }, [meetingId, setCurrentMeeting]);
+  }, [meetingId, setCurrentMeeting, serverAddress]);
 
   // Reset states when meetingId changes
   useEffect(() => {
@@ -131,9 +145,13 @@ function MeetingDetailsContent() {
 
     const fetchMeetingSummary = async () => {
       try {
-        const summary = await invoke('api_get_summary', {
-          meetingId: meetingId,
-        }) as any;
+        if (!serverAddress) return;
+
+        const response = await fetch(`${serverAddress}/get-summary/${meetingId}`);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const summary = await response.json();
 
         console.log('🔍 FETCH SUMMARY: Raw response:', summary);
 
@@ -232,6 +250,9 @@ function MeetingDetailsContent() {
     };
 
     const loadData = async () => {
+      // serverAddress might be empty initially
+      if (!serverAddress) return;
+
       try {
         await Promise.all([
           fetchMeetingDetails(),
@@ -242,10 +263,13 @@ function MeetingDetailsContent() {
       }
     };
 
-    loadData();
-  }, [meetingId, fetchMeetingDetails]);
+    if (serverAddress) {
+      loadData();
+    }
 
-  // Auto-generation check: runs when meeting is loaded with no summary
+  }, [meetingId, fetchMeetingDetails, serverAddress]);
+
+  // Auto-generation check
   useEffect(() => {
     const checkAutoGen = async () => {
       // Only auto-generate if:
@@ -267,6 +291,7 @@ function MeetingDetailsContent() {
 
     checkAutoGen();
   }, [meetingDetails, meetingSummary, hasCheckedAutoGen, setupAutoGeneration]);
+
 
   if (error) {
     return (

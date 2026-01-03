@@ -1,158 +1,75 @@
 # Meetily - Frontend
 
-A modern desktop application for recording, transcribing, and analyzing meetings with AI assistance. Built with Next.js and Tauri for a native desktop experience.
+A modern web application for recording, transcribing, and analyzing meetings with AI assistance. Built with Next.js.
 
 ## Features
 
-- Real-time audio recording from both microphone and system audio
-- Live transcription using Whisper ASR (locally running)
-- Native desktop integration using Tauri
+- Real-time audio recording from microphone
+- Live transcription using Whisper ASR (via Python Backend)
 - Speaker diarization support
 - Rich text editor for note-taking
-- Privacy-focused: All processing happens locally
+- Privacy-focused: All processing happens locally (or on your private server)
 
 ## Prerequisites
 
-### For macOS:
 - Node.js (v18 or later)
-- Rust (latest stable)
 - pnpm (v8 or later)
-- [Xcode Command Line Tools](https://developer.apple.com/download/all/?q=xcode)
-
-### For Windows:
-- Node.js (v18 or later)
-- Rust (latest stable)
-- pnpm (v8 or later)
-- Visual Studio Build Tools with C++ development tools
-- Windows 10 or later
-
 
 ## Project Structure
 
 ```
 /frontend
 ├── src/                   # Next.js frontend code
-├── src-tauri/             # Rust backend for Tauri
-├── whisper-server-package/ # Local transcription server
-│   ├── models/            # Whisper models
-│   ├── whisper-server     # Pre-built server binary
-│   └── run-server.sh      # Script to start the server
 ├── public/                # Static assets
 └── package.json           # Project dependencies
 ```
 
 ## Installation
 
-### For macOS:
-
-1. Install prerequisites:
-   ```bash
-   # Install Homebrew if not already installed
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-   
-   # Install Node.js
-   brew install node
-   
-   # Install Rust
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   
-   # Install pnpm
-   npm install -g pnpm
-   
-   # Install Xcode Command Line Tools
-   xcode-select --install
-   ```
-
-2. Clone the repository and navigate to the frontend directory:
-   ```bash
-   git clone https://github.com/Zackriya-Solutions/meeting-minutes
-   cd meeting-minutes/frontend
-   ```
-  
-
-3. Install dependencies:
-   ```bash
-   pnpm install
-   ```
-
-### For Windows:
-
 1. Install prerequisites:
    - Install [Node.js](https://nodejs.org/) (v18 or later)
-   - Install [Rust](https://www.rust-lang.org/tools/install)
    - Install pnpm: `npm install -g pnpm`
-   - Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with C++ development tools
 
 2. Clone the repository and navigate to the frontend directory:
-   ```cmd
+   ```bash
    git clone https://github.com/Zackriya-Solutions/meeting-minutes
    cd meeting-minutes/frontend
    ```
 
 3. Install dependencies:
-   ```cmd
+   ```bash
    pnpm install
    ```
 
 ## Running the App
 
-### For macOS:
+### Development
 
-Use the provided script to run the app in development mode:
+To run the app in development mode:
 ```bash
-./clean_run.sh
+pnpm run dev
 ```
+The app will be available at imports `http://localhost:3118` (or similar).
 
-To build a production version:
+### Production Build
+
+To build and start the production version:
 ```bash
-./clean_build.sh
+pnpm run build
+pnpm start
 ```
 
-You can specify the log level (info, debug, trace):
-```bash
-./clean_run.sh debug
-```
+## Backend Integration
 
-### For Windows:
-
-Use the provided script to run the app in development mode:
-```cmd
-clean_run_windows.bat
-```
-
-To build a production version:
-```cmd
-clean_build_windows.bat
-```
-
-## Whisper Transcription Server
-
-The application includes a pre-built Whisper server for real-time speech recognition:
-
-- Located in `whisper-server-package/`
-- Supports speaker diarization
-- Runs locally for privacy
-- Uses Metal acceleration on macOS
-
-To run the Whisper server manually:
-```bash
-cd whisper-server-package
-./run-server.sh
-```
-
-The server will be available at http://localhost:8178
+This frontend requires the Python FastAPI backend to be running.
+- Backend handles transcription, summarization, and storage.
+- Ensure the backend is running on `http://localhost:8000`.
 
 ## Development
 
 ### Frontend (Next.js)
 - The frontend is built with Next.js and Tailwind CSS
 - Source code is in the `src/` directory
-- To run only the frontend: `pnpm run dev`
-
-### Backend (Tauri)
-- The Rust backend is in the `src-tauri/` directory
-- Handles audio capture, file system access, and native integrations
-- To run only the Tauri development server: `pnpm run tauri dev`
 
 ## Troubleshooting
 

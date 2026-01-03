@@ -1,13 +1,12 @@
 import React from "react";
-import { invoke } from '@tauri-apps/api/core';
 import Image from 'next/image';
 import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch";
 
 
 export function About() {
-    const handleContactClick = async () => {
+    const handleContactClick = () => {
         try {
-            await invoke('open_external_url', { url: 'https://meetily.zackriya.com/#about' });
+            window.open('https://meetily.zackriya.com/#about', '_blank');
         } catch (error) {
             console.error('Failed to open link:', error);
         }
@@ -18,10 +17,10 @@ export function About() {
             {/* Compact Header */}
             <div className="text-center">
                 <div className="mb-3">
-                    <Image 
-                        src="icon_128x128.png" 
-                        alt="Meetily Logo" 
-                        width={64} 
+                    <Image
+                        src="icon_128x128.png"
+                        alt="Meetily Logo"
+                        width={64}
                         height={64}
                         className="mx-auto"
                     />
@@ -69,7 +68,7 @@ export function About() {
                 <p className="text-s text-gray-600">
                     If you're planning to build privacy-first custom AI agents or a fully tailored product for your <span className="font-bold">business</span>, we can help you build it.
                 </p>
-                <button 
+                <button
                     onClick={handleContactClick}
                     className="inline-flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded transition-colors duration-200 shadow-sm hover:shadow-md"
                 >

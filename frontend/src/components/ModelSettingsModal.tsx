@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSidebar } from './Sidebar/SidebarProvider';
-import { invoke } from '@tauri-apps/api/core';
+
 import { Button } from '@/components/ui/button';
 import { useOllamaDownload } from '@/contexts/OllamaDownloadContext';
 import { Input } from '@/components/ui/input';
@@ -18,6 +18,7 @@ import { Switch } from '@/components/ui/switch';
 import { Lock, Unlock, Eye, EyeOff, RefreshCw, CheckCircle2, XCircle, ChevronDown, ChevronUp, Download } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { formatBytes } from '@/lib/formatUtils';
 
 export interface ModelConfig {
   provider: 'ollama' | 'groq' | 'claude' | 'openai' | 'openrouter';
@@ -77,7 +78,7 @@ export function ModelSettingsModal({
   const [isEndpointSectionCollapsed, setIsEndpointSectionCollapsed] = useState<boolean>(true); // Collapsed by default
 
   // Use global download context instead of local state
-  const { isDownloading, getProgress, downloadingModels } = useOllamaDownload();
+  const { isDownloading, getProgress, downloadingModels, downloadModel } = useOllamaDownload();
 
   // Cache models by endpoint to avoid refetching when reverting endpoint changes
   const modelsCache = useRef<Map<string, OllamaModel[]>>(new Map());
@@ -112,10 +113,10 @@ export function ModelSettingsModal({
 
   const fetchApiKey = async (provider: string) => {
     try {
-      const data = (await invoke('api_get_api_key', {
-        provider,
-      })) as string;
-      setApiKey(data || '');
+      console.log('Fetching API key for', provider);
+      // In web version, we might not have a secure way to fetch stored keys yet, 
+      // or we rely on them being in the config response.
+      // Mocking for now or using local state if parent passed it.
     } catch (err) {
       console.error('Error fetching API key:', err);
       setApiKey(null);
@@ -184,29 +185,17 @@ export function ModelSettingsModal({
       }
 
       try {
-        const data = (await invoke('api_get_model_config')) as any;
-        if (data && data.provider !== null) {
-          setModelConfig(data);
-
-          // Fetch API key if not included in response and provider requires it
-          if (data.provider !== 'ollama' && !data.apiKey) {
-            try {
-              const apiKeyData = await invoke('api_get_api_key', {
-                provider: data.provider
-              }) as string;
-              data.apiKey = apiKeyData;
-              setApiKey(apiKeyData);
-            } catch (err) {
-              console.error('Failed to fetch API key:', err);
+        if (!serverAddress) return;
+        const response = await fetch(`${serverAddress}/get-model-config`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.provider !== null) {
+            setModelConfig(data);
+            if (data.ollamaEndpoint) {
+              setOllamaEndpoint(data.ollamaEndpoint);
             }
+            hasLoadedInitialConfig.current = true;
           }
-
-          // Sync ollamaEndpoint state with fetched config
-          if (data.ollamaEndpoint) {
-            setOllamaEndpoint(data.ollamaEndpoint);
-            // Don't set lastFetchedEndpoint here - it will be set after successful model fetch
-          }
-          hasLoadedInitialConfig.current = true; // Mark that initial config is loaded
         }
       } catch (error) {
         console.error('Failed to fetch model config:', error);
@@ -221,12 +210,13 @@ export function ModelSettingsModal({
   useEffect(() => {
     const fetchAutoGenerateSetting = async () => {
       try {
-        const enabled = (await invoke('api_get_auto_generate_setting')) as boolean;
+        // Mocking auto-generate setting fetch for now
+        // const response = await fetch(`${serverAddress}/get-auto-generate-setting`);
+        // const enabled = await response.json();
+        const enabled = true;
         setAutoGenerateEnabled(enabled);
-        console.log('Auto-generate setting loaded:', enabled);
       } catch (err) {
         console.error('Failed to fetch auto-generate setting:', err);
-        // Keep default value (true) on error
       }
     };
 
@@ -295,8 +285,20 @@ export function ModelSettingsModal({
     setError(''); // Clear previous errors
 
     try {
-      const endpoint = trimmedEndpoint || null;
-      const modelList = (await invoke('get_ollama_models', { endpoint })) as OllamaModel[];
+      const endpoint = trimmedEndpoint || 'http://localhost:11434';
+      // Use direct fetch to Ollama if possible, otherwise use proxy
+      // For web, assuming localhost Ollama is available or proxy is set up
+      const response = await fetch(`${endpoint}/api/tags`);
+      if (!response.ok) throw new Error('Failed to fetch models');
+      const data = await response.json();
+      // Transform Ollama API response to our internal format
+      const modelList = (data.models || []).map((m: any) => ({
+        name: m.name,
+        id: m.digest, // Use digest as ID
+        size: formatBytes(m.size),
+        modified: m.modified_at
+      }));
+
       setModels(modelList);
       setLastFetchedEndpoint(trimmedEndpoint); // Track successful fetch
 
@@ -345,7 +347,8 @@ export function ModelSettingsModal({
     try {
       setIsLoadingOpenRouter(true);
       setOpenRouterError('');
-      const data = (await invoke('get_openrouter_models')) as OpenRouterModel[];
+      const data: OpenRouterModel[] = []; // await fetch(...)
+      // Mock for now
       setOpenRouterModels(data);
     } catch (err) {
       console.error('Error loading OpenRouter models:', err);
@@ -370,7 +373,10 @@ export function ModelSettingsModal({
 
     // Save auto-generate setting
     // try {
-    //   await invoke('api_save_auto_generate_setting', { enabled: autoGenerateEnabled });
+    //   const response = await fetch(`${serverAddress}/save-auto-generate-setting`, {
+    //     method: 'POST',
+    //     body: JSON.stringify({ enabled: autoGenerateEnabled })
+    //   });
     //   console.log('Auto-generate setting saved:', autoGenerateEnabled);
     // } catch (err) {
     //   console.error('Failed to save auto-generate setting:', err);
@@ -405,11 +411,8 @@ export function ModelSettingsModal({
         description: 'This may take a few minutes'
       });
 
-      // The download will be tracked by the global context via events
-      await invoke('pull_ollama_model', {
-        modelName: recommendedModel,
-        endpoint
-      });
+      // Use context to download
+      await downloadModel(recommendedModel, endpoint);
 
       // Refresh the models list after successful download
       await fetchOllamaModels(true);
@@ -426,10 +429,11 @@ export function ModelSettingsModal({
   // Function to delete Ollama model
   const deleteOllamaModel = async (modelName: string) => {
     try {
-      const endpoint = ollamaEndpoint.trim() || null;
-      await invoke('delete_ollama_model', {
-        modelName,
-        endpoint
+      const endpoint = ollamaEndpoint.trim() || 'http://localhost:11434';
+      await fetch(`${endpoint}/api/delete`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: modelName })
       });
 
       toast.success(`Model ${modelName} deleted`);

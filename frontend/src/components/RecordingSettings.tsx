@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Switch } from '@/components/ui/switch';
 import { FolderOpen } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
 import { DeviceSelection, SelectedDevices } from '@/components/DeviceSelection';
-import Analytics from '@/lib/analytics';
+import { Analytics } from '@/lib/analytics';
 import { toast } from 'sonner';
 
 export interface RecordingPreferences {
@@ -20,7 +19,7 @@ interface RecordingSettingsProps {
 
 export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   const [preferences, setPreferences] = useState<RecordingPreferences>({
-    save_folder: '',
+    save_folder: 'Downloads',
     auto_save: true,
     file_format: 'mp4',
     preferred_mic_device: null,
@@ -32,19 +31,14 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
 
   // Load recording preferences on component mount
   useEffect(() => {
-    const loadPreferences = async () => {
+    const loadPreferences = () => {
       try {
-        const prefs = await invoke<RecordingPreferences>('get_recording_preferences');
-        setPreferences(prefs);
+        const stored = localStorage.getItem('recording_preferences');
+        if (stored) {
+          setPreferences(JSON.parse(stored));
+        }
       } catch (error) {
         console.error('Failed to load recording preferences:', error);
-        // If loading fails, get default folder path
-        try {
-          const defaultPath = await invoke<string>('get_default_recordings_folder_path');
-          setPreferences(prev => ({ ...prev, save_folder: defaultPath }));
-        } catch (defaultError) {
-          console.error('Failed to get default folder path:', defaultError);
-        }
       } finally {
         setLoading(false);
       }
@@ -55,17 +49,10 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
 
   // Load recording notification preference
   useEffect(() => {
-    const loadNotificationPref = async () => {
-      try {
-        const { Store } = await import('@tauri-apps/plugin-store');
-        const store = await Store.load('preferences.json');
-        const show = await store.get<boolean>('show_recording_notification') ?? true;
-        setShowRecordingNotification(show);
-      } catch (error) {
-        console.error('Failed to load notification preference:', error);
-      }
-    };
-    loadNotificationPref();
+    const show = localStorage.getItem('show_recording_notification');
+    if (show !== null) {
+      setShowRecordingNotification(show === 'true');
+    }
   }, []);
 
   const handleAutoSaveToggle = async (enabled: boolean) => {
@@ -74,7 +61,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     await savePreferences(newPreferences);
 
     // Track auto-save setting change
-    await Analytics.track('auto_save_recording_toggled', {
+    Analytics.track('auto_save_recording_toggled', {
       enabled: enabled.toString()
     });
   };
@@ -89,30 +76,22 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     await savePreferences(newPreferences);
 
     // Track default device preference changes
-    // Note: Individual device selection analytics are tracked in DeviceSelection component
-    await Analytics.track('default_devices_changed', {
+    Analytics.track('default_devices_changed', {
       has_preferred_microphone: (!!devices.micDevice).toString(),
       has_preferred_system_audio: (!!devices.systemDevice).toString()
     });
   };
 
-  const handleOpenFolder = async () => {
-    try {
-      await invoke('open_recordings_folder');
-    } catch (error) {
-      console.error('Failed to open recordings folder:', error);
-    }
+  const handleOpenFolder = () => {
+    toast.info('Recordings are saved to your browser downloads.');
   };
 
-  const handleNotificationToggle = async (enabled: boolean) => {
+  const handleNotificationToggle = (enabled: boolean) => {
     try {
       setShowRecordingNotification(enabled);
-      const { Store } = await import('@tauri-apps/plugin-store');
-      const store = await Store.load('preferences.json');
-      await store.set('show_recording_notification', enabled);
-      await store.save();
+      localStorage.setItem('show_recording_notification', String(enabled));
       toast.success('Preference saved');
-      await Analytics.track('recording_notification_preference_changed', {
+      Analytics.track('recording_notification_preference_changed', {
         enabled: enabled.toString()
       });
     } catch (error) {
@@ -124,7 +103,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   const savePreferences = async (prefs: RecordingPreferences) => {
     setSaving(true);
     try {
-      await invoke('set_recording_preferences', { preferences: prefs });
+      localStorage.setItem('recording_preferences', JSON.stringify(prefs));
       onSave?.(prefs);
 
       // Show success toast with device details
@@ -135,9 +114,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       });
     } catch (error) {
       console.error('Failed to save recording preferences:', error);
-      toast.error("Failed to save device preferences", {
-        description: error instanceof Error ? error.message : String(error)
-      });
+      toast.error("Failed to save device preferences");
     } finally {
       setSaving(false);
     }
@@ -182,15 +159,8 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
           <div className="p-4 border rounded-lg bg-gray-50">
             <div className="font-medium mb-2">Save Location</div>
             <div className="text-sm text-gray-600 mb-3 break-all">
-              {preferences.save_folder || 'Default folder'}
+              Browser Downloads
             </div>
-            <button
-              onClick={handleOpenFolder}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
-            >
-              <FolderOpen className="w-4 h-4" />
-              Open Folder
-            </button>
           </div>
 
           <div className="p-4 border rounded-lg bg-blue-50">

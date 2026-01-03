@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react"
 import { Switch } from "./ui/switch"
 import { FolderOpen } from "lucide-react"
-import { invoke } from "@tauri-apps/api/core"
 import Analytics from "@/lib/analytics"
 import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch"
+import { toast } from "sonner"
 
 interface StorageLocations {
   database: string
@@ -36,53 +36,27 @@ interface NotificationSettings {
 
 export function PreferenceSettings() {
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean | null>(null);
-  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings | null>(null);
-  const [storageLocations, setStorageLocations] = useState<StorageLocations | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
-  const [previousNotificationsEnabled, setPreviousNotificationsEnabled] = useState<boolean | null>(null);
+  const [storageLocations, setStorageLocations] = useState<StorageLocations>({
+    database: 'Server Managed',
+    models: 'Server Managed',
+    recordings: 'Browser Downloads'
+  });
 
   useEffect(() => {
-    const loadPreferences = async () => {
+    const loadPreferences = () => {
       try {
-        // Load notification settings from backend
-        let settings: NotificationSettings | null = null;
-        try {
-          settings = await invoke<NotificationSettings>('get_notification_settings');
-          setNotificationSettings(settings);
-          // Notification enabled means both started and stopped notifications are enabled
-          setNotificationsEnabled(
-            settings.notification_preferences.show_recording_started &&
-            settings.notification_preferences.show_recording_stopped
-          );
-        } catch (notifError) {
-          console.error('Failed to load notification settings, using defaults:', notifError);
-          // Use default values if notification settings fail to load
-          setNotificationsEnabled(true);
-        }
-
-        // Load storage locations
-        const [dbDir, modelsDir, recordingsDir] = await Promise.all([
-          invoke<string>('get_database_directory'),
-          invoke<string>('whisper_get_models_directory'),
-          invoke<string>('get_default_recordings_folder_path')
-        ]);
-
-        setStorageLocations({
-          database: dbDir,
-          models: modelsDir,
-          recordings: recordingsDir
-        });
+        const storedEnabled = localStorage.getItem('notifications_enabled');
+        setNotificationsEnabled(storedEnabled !== 'false');
 
         // Track preferences page view
-        await Analytics.track('preferences_viewed', {
-          notifications_enabled: settings?.notification_preferences.show_recording_started ? 'true' : 'false'
+        Analytics.track('preferences_viewed', {
+          notifications_enabled: storedEnabled !== 'false' ? 'true' : 'false'
         });
       } catch (error) {
         console.error('Failed to load preferences:', error);
       } finally {
         setLoading(false);
-        setIsInitialLoad(false);
       }
     };
 
@@ -90,63 +64,19 @@ export function PreferenceSettings() {
   }, [])
 
   useEffect(() => {
-    // Skip update on initial load or if value hasn't actually changed
-    if (isInitialLoad || notificationsEnabled === null || notificationsEnabled === previousNotificationsEnabled) return;
-    if (!notificationSettings) return;
+    if (loading || notificationsEnabled === null) return;
 
-    const updateNotificationSettings = async () => {
-      console.log("Updating notification settings to:", notificationsEnabled);
+    localStorage.setItem('notifications_enabled', String(notificationsEnabled));
 
-      try {
-        // Update the notification preferences
-        const updatedSettings: NotificationSettings = {
-          ...notificationSettings,
-          notification_preferences: {
-            ...notificationSettings.notification_preferences,
-            show_recording_started: notificationsEnabled,
-            show_recording_stopped: notificationsEnabled,
-          }
-        };
+    // Track notification preference change
+    Analytics.track('notification_settings_changed', {
+      notifications_enabled: notificationsEnabled.toString()
+    });
 
-        console.log("Calling set_notification_settings with:", updatedSettings);
-        await invoke('set_notification_settings', { settings: updatedSettings });
-        setNotificationSettings(updatedSettings);
-        setPreviousNotificationsEnabled(notificationsEnabled);
-        console.log("Successfully updated notification settings to:", notificationsEnabled);
+  }, [notificationsEnabled, loading])
 
-        // Track notification preference change - only fires when user manually toggles
-        await Analytics.track('notification_settings_changed', {
-          notifications_enabled: notificationsEnabled.toString()
-        });
-      } catch (error) {
-        console.error('Failed to update notification settings:', error);
-      }
-    };
-
-    updateNotificationSettings();
-  }, [notificationsEnabled])
-
-  const handleOpenFolder = async (folderType: 'database' | 'models' | 'recordings') => {
-    try {
-      switch (folderType) {
-        case 'database':
-          await invoke('open_database_folder');
-          break;
-        case 'models':
-          await invoke('open_models_folder');
-          break;
-        case 'recordings':
-          await invoke('open_recordings_folder');
-          break;
-      }
-
-      // Track storage folder access
-      await Analytics.track('storage_folder_opened', {
-        folder_type: folderType
-      });
-    } catch (error) {
-      console.error(`Failed to open ${folderType} folder:`, error);
-    }
+  const handleOpenFolder = (folderType: 'recordings') => {
+    toast.info('Recordings are available in your browser downloads or the Meeting Details page.');
   };
 
   if (loading || notificationsEnabled === null) {
@@ -174,41 +104,11 @@ export function PreferenceSettings() {
         </p>
 
         <div className="space-y-4">
-          {/* Database Location */}
-          {/* <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Database</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
-              {storageLocations?.database || 'Loading...'}
-            </div>
-            <button
-              onClick={() => handleOpenFolder('database')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
-            >
-              <FolderOpen className="w-4 h-4" />
-              Open Folder
-            </button>
-          </div> */}
-
-          {/* Models Location */}
-          {/* <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Whisper Models</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
-              {storageLocations?.models || 'Loading...'}
-            </div>
-            <button
-              onClick={() => handleOpenFolder('models')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
-            >
-              <FolderOpen className="w-4 h-4" />
-              Open Folder
-            </button>
-          </div> */}
-
           {/* Recordings Location */}
           <div className="p-4 border rounded-lg bg-gray-50">
             <div className="font-medium mb-2">Meeting Recordings</div>
             <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
-              {storageLocations?.recordings || 'Loading...'}
+              {storageLocations.recordings}
             </div>
             <button
               onClick={() => handleOpenFolder('recordings')}
@@ -222,7 +122,7 @@ export function PreferenceSettings() {
 
         <div className="mt-4 p-3 bg-blue-50 rounded-md">
           <p className="text-xs text-blue-800">
-            <strong>Note:</strong> Database and models are stored together in your application data directory for unified management.
+            <strong>Note:</strong> Data is stored securely on the server.
           </p>
         </div>
       </div>

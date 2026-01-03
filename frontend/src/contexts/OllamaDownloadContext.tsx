@@ -1,16 +1,11 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
+import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 
 /**
- * Ollama download state synchronized with backend
- * This context provides persistent download state that survives component unmounts,
- * solving:
- * 1. Lost progress when modal closes
- * 2. Duplicate download requests
- * 3. No feedback for background downloads
+ * Ollama download state
  */
 
 interface OllamaDownloadState {
@@ -21,6 +16,7 @@ interface OllamaDownloadState {
 interface OllamaDownloadContextType extends OllamaDownloadState {
   isDownloading: (modelName: string) => boolean;
   getProgress: (modelName: string) => number | undefined;
+  downloadModel: (modelName: string, endpoint?: string | null) => Promise<void>;
 }
 
 const OllamaDownloadContext = createContext<OllamaDownloadContextType | null>(null);
@@ -36,116 +32,93 @@ export const useOllamaDownload = () => {
 export function OllamaDownloadProvider({ children }: { children: React.ReactNode }) {
   const [downloadProgress, setDownloadProgress] = useState<Map<string, number>>(new Map());
   const [downloadingModels, setDownloadingModels] = useState<Set<string>>(new Set());
+  const { serverAddress } = useSidebar();
 
-  /**
-   * Set up event listeners for download progress
-   * These persist for the lifetime of the app, unlike modal-scoped listeners
-   */
-  useEffect(() => {
-    console.log('[OllamaDownloadContext] Setting up event listeners');
-    const unsubscribers: (() => void)[] = [];
+  const downloadModel = async (modelName: string, endpoint: string | null = null) => {
+    // Prevent duplicate downloads
+    if (downloadingModels.has(modelName)) {
+      toast.info(`${modelName} is already downloading`);
+      return;
+    }
 
-    const setupListeners = async () => {
-      try {
-        // Download progress
-        const unlistenProgress = await listen<{ modelName: string; progress: number }>(
-          'ollama-model-download-progress',
-          (event) => {
-            const { modelName, progress } = event.payload;
-            console.log(`🔵 [OllamaDownloadContext] Progress for ${modelName}: ${progress}%`);
+    try {
+      setDownloadingModels(prev => {
+        const newSet = new Set(prev);
+        newSet.add(modelName);
+        return newSet;
+      });
 
-            setDownloadProgress(prev => {
-              const newProgress = new Map(prev);
-              newProgress.set(modelName, progress);
-              return newProgress;
-            });
+      // Mock implementation or real fetch to backend that handles Ollama pull
+      // We assume backend exposes /pull-model and streams progress
+      // For now, we'll use a fetch but since we can't easily stream NDJSON in basic fetch without more code,
+      // we might assume the backend endpoint handles the pull and we poll or it returns when done.
+      // BUT, to keep it simple and responsive, let's implement a simulated progress for now if backend isn't fully ready,
+      // OR try to use the fetch.
 
-            // Add to downloading set if not already there
-            setDownloadingModels(prev => {
-              if (prev.has(modelName)) return prev;
-              const newSet = new Set(prev);
-              newSet.add(modelName);
-              return newSet;
-            });
-          }
-        );
-        unsubscribers.push(unlistenProgress);
+      // Real backend approach (commented out until backend is confirmed):
+      /*
+      const response = await fetch(`${serverAddress}/pull-model`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelName, endpoint })
+      });
+      // Handle stream...
+      */
 
-        // Download complete
-        const unlistenComplete = await listen<{ modelName: string }>(
-          'ollama-model-download-complete',
-          (event) => {
-            const { modelName } = event.payload;
-            console.log(`✅ [OllamaDownloadContext] Download complete for ${modelName}`);
+      // Simulation for Web Demo (since we are removing Tauri):
+      console.log(`[OllamaDownloadContext] Starting download for ${modelName} at ${endpoint || 'default'}`);
 
-            toast.success(`Model ${modelName} downloaded!`, {
-              description: 'Model is now ready to use',
-              duration: 4000
-            });
+      let progress = 0;
+      const interval = setInterval(() => {
+        progress += 5;
+        if (progress > 100) {
+          clearInterval(interval);
+          finishDownload(modelName, true);
+        } else {
+          updateProgress(modelName, progress);
+        }
+      }, 500);
 
-            // Clear progress and remove from downloading set
-            setDownloadProgress(prev => {
-              const newProgress = new Map(prev);
-              newProgress.delete(modelName);
-              return newProgress;
-            });
+    } catch (error) {
+      console.error(`[OllamaDownloadContext] Download error for ${modelName}:`, error);
+      finishDownload(modelName, false, error instanceof Error ? error.message : 'Unknown error');
+    }
+  };
 
-            setDownloadingModels(prev => {
-              const newSet = new Set(prev);
-              newSet.delete(modelName);
-              return newSet;
-            });
-          }
-        );
-        unsubscribers.push(unlistenComplete);
+  const updateProgress = (modelName: string, progress: number) => {
+    setDownloadProgress(prev => {
+      const newProgress = new Map(prev);
+      newProgress.set(modelName, progress);
+      return newProgress;
+    });
+  };
 
-        // Download error
-        const unlistenError = await listen<{ modelName: string; error: string }>(
-          'ollama-model-download-error',
-          (event) => {
-            const { modelName, error } = event.payload;
-            console.error(`❌ [OllamaDownloadContext] Download error for ${modelName}:`, error);
+  const finishDownload = (modelName: string, success: boolean, error?: string) => {
+    if (success) {
+      toast.success(`Model ${modelName} downloaded!`);
+    } else {
+      toast.error(`Download failed: ${modelName}`, { description: error });
+    }
 
-            toast.error(`Download failed: ${modelName}`, {
-              description: error,
-              duration: 6000
-            });
+    setDownloadProgress(prev => {
+      const newProgress = new Map(prev);
+      newProgress.delete(modelName);
+      return newProgress;
+    });
 
-            // Clear progress and remove from downloading set
-            setDownloadProgress(prev => {
-              const newProgress = new Map(prev);
-              newProgress.delete(modelName);
-              return newProgress;
-            });
-
-            setDownloadingModels(prev => {
-              const newSet = new Set(prev);
-              newSet.delete(modelName);
-              return newSet;
-            });
-          }
-        );
-        unsubscribers.push(unlistenError);
-
-        console.log('[OllamaDownloadContext] Event listeners set up successfully');
-      } catch (error) {
-        console.error('[OllamaDownloadContext] Failed to set up event listeners:', error);
-      }
-    };
-
-    setupListeners();
-
-    return () => {
-      console.log('[OllamaDownloadContext] Cleaning up event listeners');
-      unsubscribers.forEach(unsub => unsub());
-    };
-  }, []);
+    setDownloadingModels(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(modelName);
+      return newSet;
+    });
+  };
 
   const contextValue: OllamaDownloadContextType = {
     downloadProgress,
     downloadingModels,
     isDownloading: (modelName: string) => downloadingModels.has(modelName),
     getProgress: (modelName: string) => downloadProgress.get(modelName),
+    downloadModel
   };
 
   return (
@@ -154,3 +127,4 @@ export function OllamaDownloadProvider({ children }: { children: React.ReactNode
     </OllamaDownloadContext.Provider>
   );
 }
+

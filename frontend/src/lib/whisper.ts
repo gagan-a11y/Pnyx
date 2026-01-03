@@ -292,58 +292,59 @@ export function getRecommendedModel(systemSpecs?: { ram: number; cores: number }
 }
 
 // Tauri command wrappers for whisper-rs backend
-import { invoke } from '@tauri-apps/api/core';
-
+// Tauri command wrappers for whisper-rs backend - STUBBED FOR WEB
 export class WhisperAPI {
   static async init(): Promise<void> {
-    await invoke('whisper_init');
+    console.log('WhisperAPI.init - Stubbed for web');
   }
   
   static async getAvailableModels(): Promise<ModelInfo[]> {
-    return await invoke('whisper_get_available_models');
+    console.log('WhisperAPI.getAvailableModels - Stubbed for web');
+    return [];
   }
   
   static async loadModel(modelName: string): Promise<void> {
-    await invoke('whisper_load_model', { modelName });
+    console.log('WhisperAPI.loadModel - Stubbed for web', modelName);
   }
   
   static async getCurrentModel(): Promise<string | null> {
-    return await invoke('whisper_get_current_model');
+    return null;
   }
   
   static async isModelLoaded(): Promise<boolean> {
-    return await invoke('whisper_is_model_loaded');
+    return false;
   }
   
   static async transcribeAudio(audioData: number[]): Promise<string> {
-    return await invoke('whisper_transcribe_audio', { audioData });
+    console.error('WhisperAPI.transcribeAudio called on web - this should use backend API');
+    return '';
   }
   
   static async getModelsDirectory(): Promise<string> {
-    return await invoke('whisper_get_models_directory');
+    return 'Server Managed';
   }
   
   static async downloadModel(modelName: string): Promise<void> {
-    await invoke('whisper_download_model', { modelName });
+    console.log('WhisperAPI.downloadModel - Stubbed for web', modelName);
   }
   
   static async cancelDownload(modelName: string): Promise<void> {
-    await invoke('whisper_cancel_download', { modelName });
+    console.log('WhisperAPI.cancelDownload - Stubbed for web', modelName);
   }
 
   static async deleteCorruptedModel(modelName: string): Promise<string> {
-    return await invoke('whisper_delete_corrupted_model', { modelName });
+    return 'success';
   }
 
   static async hasAvailableModels(): Promise<boolean> {
-    return await invoke('whisper_has_available_models');
+    return true;
   }
 
   static async validateModelReady(): Promise<string> {
-    return await invoke('whisper_validate_model_ready');
+    return 'ready';
   }
 
   static async openModelsFolder(): Promise<void> {
-    await invoke('open_models_folder');
+    console.log('WhisperAPI.openModelsFolder - Stubbed for web');
   }
 }

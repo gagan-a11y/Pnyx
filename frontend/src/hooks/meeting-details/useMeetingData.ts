@@ -2,7 +2,6 @@ import { useState, useCallback, useRef } from 'react';
 import { Transcript, Summary } from '@/types';
 import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
 import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
-import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 
 interface UseMeetingDataProps {
@@ -26,7 +25,7 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
   const blockNoteSummaryRef = useRef<BlockNoteSummaryViewRef>(null);
 
   // Sidebar context
-  const { setCurrentMeeting, setMeetings, meetings: sidebarMeetings } = useSidebar();
+  const { setCurrentMeeting, setMeetings, meetings: sidebarMeetings, serverAddress } = useSidebar();
 
   // Handlers
   const handleTitleChange = useCallback((newTitle: string) => {
@@ -40,9 +39,13 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
 
   const handleSaveMeetingTitle = useCallback(async () => {
     try {
-      await invokeTauri('api_save_meeting_title', {
-        meetingId: meeting.id,
-        title: meetingTitle,
+      await fetch(`${serverAddress || 'http://localhost:5167'}/save-meeting-title`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meeting_id: meeting.id,
+          title: meetingTitle,
+        })
       });
 
       console.log('Save meeting title success');
@@ -93,9 +96,13 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
         };
       }
 
-      await invokeTauri('api_save_meeting_summary', {
-        meetingId: meeting.id,
-        summary: formattedSummary,
+      await fetch(`${serverAddress || 'http://localhost:5167'}/save-summary`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          meeting_id: meeting.id,
+          summary: formattedSummary,
+        })
       });
 
       console.log('✅ Save meeting summary success');

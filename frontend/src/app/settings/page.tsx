@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { invoke } from '@tauri-apps/api/core';
 import { TranscriptSettings, TranscriptModelProps } from '@/components/TranscriptSettings';
 import { RecordingSettings } from '@/components/RecordingSettings';
 import { PreferenceSettings } from '@/components/PreferenceSettings';
@@ -31,14 +30,17 @@ export default function SettingsPage() {
   useEffect(() => {
     const loadTranscriptConfig = async () => {
       try {
-        const config = await invoke('api_get_transcript_config') as any;
-        if (config) {
-          console.log('Loaded saved transcript config:', config);
-          setTranscriptModelConfig({
-            provider: config.provider || 'localWhisper',
-            model: config.model || 'large-v3',
-            apiKey: config.apiKey || null
-          });
+        const response = await fetch('http://localhost:8000/api/transcript-config');
+        if (response.ok) {
+          const config = await response.json();
+          if (config) {
+            console.log('Loaded saved transcript config:', config);
+            setTranscriptModelConfig({
+              provider: config.provider || 'localWhisper',
+              model: config.model || 'large-v3',
+              apiKey: config.apiKey || null
+            });
+          }
         }
       } catch (error) {
         console.error('Failed to load transcript config:', error);
@@ -51,11 +53,13 @@ export default function SettingsPage() {
   const handleSaveConfig = async (config: TranscriptModelProps) => {
     try {
       console.log('[SettingsPage] Saving transcript config:', config);
-      await invoke('api_save_transcript_config', {
-        provider: config.provider,
-        model: config.model,
-        apiKey: config.apiKey
+      const response = await fetch('http://localhost:8000/api/transcript-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
       });
+
+      if (!response.ok) throw new Error('Failed to save config');
       console.log('[SettingsPage] ✅ Successfully saved transcript config');
     } catch (error) {
       console.error('[SettingsPage] ❌ Failed to save transcript config:', error);
@@ -91,8 +95,8 @@ export default function SettingsPage() {
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
                   className={`flex items-center gap-2 px-6 py-4 text-sm font-medium transition-colors whitespace-nowrap ${activeTab === tab.id
-                      ? 'border-b-2 border-blue-600 text-blue-600 bg-blue-50'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                    ? 'border-b-2 border-blue-600 text-blue-600 bg-blue-50'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
                     }`}
                 >
                   {tab.icon}
@@ -109,7 +113,7 @@ export default function SettingsPage() {
                 <TranscriptSettings
                   transcriptModelConfig={transcriptModelConfig}
                   setTranscriptModelConfig={setTranscriptModelConfig}
-                  // onSave={handleSaveConfig}
+                // onSave={handleSaveConfig}
                 />
               )}
               {activeTab === 'summaryModels' && <SummaryModelSettings />}

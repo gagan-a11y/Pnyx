@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { invoke as invokeTauri } from '@tauri-apps/api/core';
+
 import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
 
@@ -13,20 +13,14 @@ export function useTemplates() {
 
   // Fetch available templates on mount
   useEffect(() => {
-    const fetchTemplates = async () => {
-      try {
-        const templates = await invokeTauri('api_list_templates') as Array<{
-          id: string;
-          name: string;
-          description: string;
-        }>;
-        console.log('Available templates:', templates);
-        setAvailableTemplates(templates);
-      } catch (error) {
-        console.error('Failed to fetch templates:', error);
-      }
-    };
-    fetchTemplates();
+    // Mock templates for web version
+    const templates = [
+      { id: 'standard_meeting', name: 'Standard Meeting', description: 'Standard meeting summary with key points and action items' },
+      { id: 'daily_standup', name: 'Daily Standup', description: 'Concise update on progress, plans, and blockers' },
+      { id: 'interview', name: 'Interview', description: 'Candidate assessment and key discussion points' },
+      { id: 'brainstorming', name: 'Brainstorming', description: 'Capture ideas, suggestions, and creative concepts' }
+    ];
+    setAvailableTemplates(templates);
   }, []);
 
   // Handle template selection

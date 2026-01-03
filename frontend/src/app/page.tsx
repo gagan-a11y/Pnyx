@@ -11,15 +11,8 @@ import { DeviceSelection, SelectedDevices } from '@/components/DeviceSelection';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { TranscriptSettings, TranscriptModelProps } from '@/components/TranscriptSettings';
 import { LanguageSelection } from '@/components/LanguageSelection';
-import { PermissionWarning } from '@/components/PermissionWarning';
+// import { PermissionWarning } from '@/components/PermissionWarning';
 import { PreferenceSettings } from '@/components/PreferenceSettings';
-import { usePermissionCheck } from '@/hooks/usePermissionCheck';
-import { useRecordingState } from '@/contexts/RecordingStateContext';
-import { listen } from '@tauri-apps/api/event';
-import { writeTextFile } from '@tauri-apps/plugin-fs';
-import { downloadDir } from '@tauri-apps/api/path';
-import { listenerCount } from 'process';
-import { invoke } from '@tauri-apps/api/core';
 import { useNavigation } from '@/hooks/useNavigation';
 import { useRouter } from 'next/navigation';
 import type { CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
@@ -50,7 +43,7 @@ interface OllamaModel {
 }
 
 export default function Home() {
-  const [isRecording, setIsRecordingState] = useState(false);
+
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [showSummary, setShowSummary] = useState(false);
   const [summaryStatus, setSummaryStatus] = useState<SummaryStatus>('idle');
@@ -106,15 +99,10 @@ export default function Home() {
     return true;
   });
 
-  // Permission check hook
-  const { hasMicrophone, hasSystemAudio, isChecking: isCheckingPermissions, checkPermissions } = usePermissionCheck();
+  // State for web audio recording
+  const [isRecording, setIsRecording] = useState(false);
 
-  // Recording state context - provides backend-synced state
-  const recordingState = useRecordingState();
-
-  // Compute effective recording state for UI: override with local state during stop transition
-  // This ensures immediate UI feedback when stop is pressed, while preserving backend-synced state for reload functionality
-  const effectiveIsRecording = isProcessingTranscript ? false : recordingState.isRecording;
+  // Permission check skipped as browser handles it
 
   const { setCurrentMeeting, setMeetings, meetings, isMeetingActive, setIsMeetingActive, setIsRecording: setSidebarIsRecording, serverAddress, isCollapsed: sidebarCollapsed, refetchMeetings } = useSidebar();
   const handleNavigation = useNavigation('', ''); // Initialize with empty values
@@ -232,14 +220,11 @@ export default function Home() {
   useEffect(() => {
     const loadTranscriptConfig = async () => {
       try {
-        const config = await invoke('api_get_transcript_config') as any;
-        if (config) {
-          console.log('Loaded saved transcript config:', config);
-          setTranscriptModelConfig({
-            provider: config.provider || 'parakeet',
-            model: config.model || 'parakeet-tdt-0.6b-v3-int8',
-            apiKey: config.apiKey || null
-          });
+        const savedConfig = localStorage.getItem('transcript_config');
+        if (savedConfig) {
+          const config = JSON.parse(savedConfig);
+          console.log('Loaded saved transcript config from localStorage:', config);
+          setTranscriptModelConfig(config);
         }
       } catch (error) {
         console.error('Failed to load transcript config:', error);
@@ -253,52 +238,12 @@ export default function Home() {
 
   }, [meetingTitle, setCurrentMeeting]);
 
-  useEffect(() => {
-    console.log('Setting up recording state check effect, current isRecording:', isRecording);
 
-    const checkRecordingState = async () => {
-      try {
-        console.log('checkRecordingState called');
-        const { invoke } = await import('@tauri-apps/api/core');
-        console.log('About to call is_recording command');
-        const isCurrentlyRecording = await invoke('is_recording');
-        console.log('checkRecordingState: backend recording =', isCurrentlyRecording, 'UI recording =', isRecording);
-
-        if (isCurrentlyRecording && !isRecording) {
-          console.log('Recording is active in backend but not in UI, synchronizing state...');
-          setIsRecordingState(true);
-          setIsMeetingActive(true);
-        } else if (!isCurrentlyRecording && isRecording) {
-          console.log('Recording is inactive in backend but active in UI, synchronizing state...');
-          setIsRecordingState(false);
-        }
-      } catch (error) {
-        console.error('Failed to check recording state:', error);
-      }
-    };
-
-    // Test if Tauri is available
-    console.log('Testing Tauri availability...');
-    if (typeof window !== 'undefined' && (window as any).__TAURI__) {
-      console.log('Tauri is available, starting state check');
-      checkRecordingState();
-
-      // Set up a polling interval to periodically check recording state
-      const interval = setInterval(checkRecordingState, 1000); // Check every 1 second
-
-      return () => {
-        console.log('Cleaning up recording state check interval');
-        clearInterval(interval);
-      };
-    } else {
-      console.log('Tauri is not available, skipping state check');
-    }
-  }, [setIsMeetingActive]);
 
 
 
   useEffect(() => {
-    if (recordingState.isRecording) {
+    if (isRecording) {
       const interval = setInterval(() => {
         setBarHeights(prev => {
           const newHeights = [...prev];
@@ -311,345 +256,51 @@ export default function Home() {
 
       return () => clearInterval(interval);
     }
-  }, [recordingState.isRecording]);
+  }, [isRecording]);
 
-  // Update sidebar recording state when backend-synced recording state changes
+  // Update sidebar recording state
   useEffect(() => {
-    setSidebarIsRecording(recordingState.isRecording);
-  }, [recordingState.isRecording, setSidebarIsRecording]);
+    setSidebarIsRecording(isRecording);
+  }, [isRecording, setSidebarIsRecording]);
 
-  useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
-    let transcriptCounter = 0;
-    let transcriptBuffer = new Map<number, Transcript>();
-    let lastProcessedSequence = 0;
-    let processingTimer: NodeJS.Timeout | undefined;
-
-    const processBufferedTranscripts = (forceFlush = false) => {
-      const sortedTranscripts: Transcript[] = [];
-
-      // Process all available sequential transcripts
-      let nextSequence = lastProcessedSequence + 1;
-      while (transcriptBuffer.has(nextSequence)) {
-        const bufferedTranscript = transcriptBuffer.get(nextSequence)!;
-        sortedTranscripts.push(bufferedTranscript);
-        transcriptBuffer.delete(nextSequence);
-        lastProcessedSequence = nextSequence;
-        nextSequence++;
+  // Handle receiving transcript updates from RecordingControls
+  const handleTranscriptReceived = useCallback((newTranscript: TranscriptUpdate) => {
+    // Deduplicate by sequence_id
+    setTranscripts(prev => {
+      // Check if we already have this transcript
+      if (prev.some(t => t.sequence_id === newTranscript.sequence_id)) {
+        return prev;
       }
 
-      // Add any buffered transcripts that might be out of order
-      const now = Date.now();
-      const staleThreshold = 100;  // 100ms safety net only (serial workers = sequential order)
-      const recentThreshold = 0;    // Show immediately - no delay needed with serial processing
-      const staleTranscripts: Transcript[] = [];
-      const recentTranscripts: Transcript[] = [];
-      const forceFlushTranscripts: Transcript[] = [];
-
-      for (const [sequenceId, transcript] of transcriptBuffer.entries()) {
-        if (forceFlush) {
-          // Force flush mode: process ALL remaining transcripts regardless of timing
-          forceFlushTranscripts.push(transcript);
-          transcriptBuffer.delete(sequenceId);
-          console.log(`Force flush: processing transcript with sequence_id ${sequenceId}`);
-        } else {
-          const transcriptAge = now - parseInt(transcript.id.split('-')[0]);
-          if (transcriptAge > staleThreshold) {
-            // Process stale transcripts (>100ms old - safety net)
-            staleTranscripts.push(transcript);
-            transcriptBuffer.delete(sequenceId);
-          } else if (transcriptAge >= recentThreshold) {
-            // Process immediately (0ms threshold with serial workers)
-            recentTranscripts.push(transcript);
-            transcriptBuffer.delete(sequenceId);
-            console.log(`Processing transcript with sequence_id ${sequenceId}, age: ${transcriptAge}ms`);
-          }
-        }
-      }
-
-      // Sort both stale and recent transcripts by chunk_start_time, then by sequence_id
-      const sortTranscripts = (transcripts: Transcript[]) => {
-        return transcripts.sort((a, b) => {
-          const chunkTimeDiff = (a.chunk_start_time || 0) - (b.chunk_start_time || 0);
-          if (chunkTimeDiff !== 0) return chunkTimeDiff;
-          return (a.sequence_id || 0) - (b.sequence_id || 0);
-        });
+      const transcriptData: Transcript = {
+        id: `${Date.now()}-${prev.length}`,
+        text: newTranscript.text,
+        timestamp: newTranscript.timestamp,
+        sequence_id: newTranscript.sequence_id,
+        is_partial: newTranscript.is_partial,
+        // Optional fields
+        chunk_start_time: newTranscript.chunk_start_time,
+        confidence: newTranscript.confidence,
+        audio_start_time: newTranscript.audio_start_time,
+        audio_end_time: newTranscript.audio_end_time,
+        duration: newTranscript.duration,
       };
 
-      const sortedStaleTranscripts = sortTranscripts(staleTranscripts);
-      const sortedRecentTranscripts = sortTranscripts(recentTranscripts);
-      const sortedForceFlushTranscripts = sortTranscripts(forceFlushTranscripts);
+      return [...prev, transcriptData].sort((a, b) => (a.sequence_id || 0) - (b.sequence_id || 0));
+    });
 
-      const allNewTranscripts = [...sortedTranscripts, ...sortedRecentTranscripts, ...sortedStaleTranscripts, ...sortedForceFlushTranscripts];
-
-      if (allNewTranscripts.length > 0) {
-        setTranscripts(prev => {
-          // Create a set of existing sequence_ids for deduplication
-          const existingSequenceIds = new Set(prev.map(t => t.sequence_id).filter(id => id !== undefined));
-
-          // Filter out any new transcripts that already exist
-          const uniqueNewTranscripts = allNewTranscripts.filter(transcript =>
-            transcript.sequence_id !== undefined && !existingSequenceIds.has(transcript.sequence_id)
-          );
-
-          // Only combine if we have unique new transcripts
-          if (uniqueNewTranscripts.length === 0) {
-            console.log('No unique transcripts to add - all were duplicates');
-            return prev; // No new unique transcripts to add
-          }
-
-          console.log(`Adding ${uniqueNewTranscripts.length} unique transcripts out of ${allNewTranscripts.length} received`);
-
-          // Merge with existing transcripts, maintaining chronological order
-          const combined = [...prev, ...uniqueNewTranscripts];
-
-          // Sort by chunk_start_time first, then by sequence_id
-          return combined.sort((a, b) => {
-            const chunkTimeDiff = (a.chunk_start_time || 0) - (b.chunk_start_time || 0);
-            if (chunkTimeDiff !== 0) return chunkTimeDiff;
-            return (a.sequence_id || 0) - (b.sequence_id || 0);
-          });
-        });
-
-        // Log the processing summary
-        const logMessage = forceFlush
-          ? `Force flush processed ${allNewTranscripts.length} transcripts (${sortedTranscripts.length} sequential, ${forceFlushTranscripts.length} forced)`
-          : `Processed ${allNewTranscripts.length} transcripts (${sortedTranscripts.length} sequential, ${recentTranscripts.length} recent, ${staleTranscripts.length} stale)`;
-        console.log(logMessage);
-      }
-    };
-
-    // Assign final flush function to ref for external access
-    finalFlushRef.current = () => processBufferedTranscripts(true);
-
-    const setupListener = async () => {
-      try {
-        console.log('🔥 Setting up MAIN transcript listener during component initialization...');
-        unlistenFn = await listen<TranscriptUpdate>('transcript-update', (event) => {
-          const now = Date.now();
-          console.log('🎯 MAIN LISTENER: Received transcript update:', {
-            sequence_id: event.payload.sequence_id,
-            text: event.payload.text.substring(0, 50) + '...',
-            timestamp: event.payload.timestamp,
-            is_partial: event.payload.is_partial,
-            received_at: new Date(now).toISOString(),
-            buffer_size_before: transcriptBuffer.size
-          });
-
-          // Check for duplicate sequence_id before processing
-          if (transcriptBuffer.has(event.payload.sequence_id)) {
-            console.log('🚫 MAIN LISTENER: Duplicate sequence_id, skipping buffer:', event.payload.sequence_id);
-            return;
-          }
-
-          // Create transcript for buffer with NEW timestamp fields
-          const newTranscript: Transcript = {
-            id: `${Date.now()}-${transcriptCounter++}`,
-            text: event.payload.text,
-            timestamp: event.payload.timestamp,
-            sequence_id: event.payload.sequence_id,
-            chunk_start_time: event.payload.chunk_start_time,
-            is_partial: event.payload.is_partial,
-            confidence: event.payload.confidence,
-            // NEW: Recording-relative timestamps for playback sync
-            audio_start_time: event.payload.audio_start_time,
-            audio_end_time: event.payload.audio_end_time,
-            duration: event.payload.duration,
-          };
-
-          // Add to buffer
-          transcriptBuffer.set(event.payload.sequence_id, newTranscript);
-          console.log(`✅ MAIN LISTENER: Buffered transcript with sequence_id ${event.payload.sequence_id}. Buffer size: ${transcriptBuffer.size}, Last processed: ${lastProcessedSequence}`);
-
-          // Clear any existing timer and set a new one
-          if (processingTimer) {
-            clearTimeout(processingTimer);
-          }
-
-          // Process buffer with minimal delay for immediate UI updates (serial workers = sequential order)
-          processingTimer = setTimeout(processBufferedTranscripts, 10);
-        });
-        console.log('✅ MAIN transcript listener setup complete');
-      } catch (error) {
-        console.error('❌ Failed to setup MAIN transcript listener:', error);
-        alert('Failed to setup transcript listener. Check console for details.');
-      }
-    };
-
-    setupListener();
-    console.log('Started enhanced listener setup');
-
-    return () => {
-      console.log('🧹 CLEANUP: Cleaning up MAIN transcript listener...');
-      if (processingTimer) {
-        clearTimeout(processingTimer);
-        console.log('🧹 CLEANUP: Cleared processing timer');
-      }
-      if (unlistenFn) {
-        unlistenFn();
-        console.log('🧹 CLEANUP: MAIN transcript listener cleaned up');
-      }
-    };
+    // Auto-scroll logic is handled by the existing useEffect on [transcripts]
   }, []);
 
   // Sync transcript history and meeting name from backend on reload
   // This fixes the issue where reloading during active recording causes state desync
-  useEffect(() => {
-    const syncFromBackend = async () => {
-      // Only sync if recording is active but we have no local transcripts
-      if (recordingState.isRecording && transcripts.length === 0) {
-        try {
-          console.log('[Reload Sync] Recording active after reload, syncing transcript history...');
 
-          // Fetch transcript history from backend
-          const history = await invoke<any[]>('get_transcript_history');
-          console.log(`[Reload Sync] Retrieved ${history.length} transcript segments from backend`);
 
-          // Convert backend format to frontend Transcript format
-          const formattedTranscripts: Transcript[] = history.map((segment: any) => ({
-            id: segment.id,
-            text: segment.text,
-            timestamp: segment.display_time, // Use display_time for UI
-            sequence_id: segment.sequence_id,
-            chunk_start_time: segment.audio_start_time,
-            is_partial: false, // History segments are always final
-            confidence: segment.confidence,
-            audio_start_time: segment.audio_start_time,
-            audio_end_time: segment.audio_end_time,
-            duration: segment.duration,
-          }));
 
-          setTranscripts(formattedTranscripts);
-          console.log('[Reload Sync] ✅ Transcript history synced successfully');
 
-          // Fetch meeting name from backend
-          const meetingName = await invoke<string | null>('get_recording_meeting_name');
-          if (meetingName) {
-            console.log('[Reload Sync] Retrieved meeting name:', meetingName);
-            setMeetingTitle(meetingName);
-            console.log('[Reload Sync] ✅ Meeting title synced successfully');
-          }
-        } catch (error) {
-          console.error('[Reload Sync] Failed to sync from backend:', error);
-        }
-      }
-    };
 
-    syncFromBackend();
-  }, [recordingState.isRecording]); // Run when recording state changes
 
-  // Set up chunk drop warning listener
-  useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
 
-    const setupChunkDropListener = async () => {
-      try {
-        console.log('Setting up chunk-drop-warning listener...');
-        unlistenFn = await listen<string>('chunk-drop-warning', (event) => {
-          console.log('Chunk drop warning received:', event.payload);
-          setChunkDropMessage(event.payload);
-          setShowChunkDropWarning(true);
-
-          // // Auto-dismiss after 8 seconds
-          // setTimeout(() => {
-          //   setShowChunkDropWarning(false);
-          // }, 8000);
-        });
-        console.log('Chunk drop warning listener setup complete');
-      } catch (error) {
-        console.error('Failed to setup chunk drop warning listener:', error);
-      }
-    };
-
-    setupChunkDropListener();
-
-    return () => {
-      console.log('Cleaning up chunk drop warning listener...');
-      if (unlistenFn) {
-        unlistenFn();
-      }
-    };
-  }, []);
-
-  // Set up recording-stopped listener for meeting navigation
-  useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
-
-    const setupRecordingStoppedListener = async () => {
-      try {
-        console.log('Setting up recording-stopped listener for navigation...');
-        unlistenFn = await listen<{
-          message: string;
-          folder_path?: string;
-          meeting_name?: string;
-        }>('recording-stopped', async (event) => {
-          console.log('Recording stopped event received:', event.payload);
-
-          const { folder_path, meeting_name } = event.payload;
-
-          // Store folder_path and meeting_name for later use in handleRecordingStop2
-          if (folder_path) {
-            sessionStorage.setItem('last_recording_folder_path', folder_path);
-            console.log('✅ Stored folder_path for frontend save:', folder_path);
-          }
-          if (meeting_name) {
-            sessionStorage.setItem('last_recording_meeting_name', meeting_name);
-            console.log('✅ Stored meeting_name for frontend save:', meeting_name);
-          }
-
-        });
-        console.log('Recording stopped listener setup complete');
-      } catch (error) {
-        console.error('Failed to setup recording stopped listener:', error);
-      }
-    };
-
-    setupRecordingStoppedListener();
-
-    return () => {
-      console.log('Cleaning up recording stopped listener...');
-      if (unlistenFn) {
-        unlistenFn();
-      }
-    };
-  }, [router]);
-
-  // Set up transcription error listener for model loading failures
-  useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
-
-    const setupTranscriptionErrorListener = async () => {
-      try {
-        console.log('Setting up transcription-error listener...');
-        unlistenFn = await listen<{ error: string, userMessage: string, actionable: boolean }>('transcription-error', (event) => {
-          console.log('Transcription error received:', event.payload);
-          const { userMessage, actionable } = event.payload;
-
-          if (actionable) {
-            // This is a model-related error that requires user action
-            setModelSelectorMessage(userMessage);
-            setShowModelSelector(true);
-          } else {
-            // Regular transcription error
-            setErrorMessage(userMessage);
-            setShowErrorAlert(true);
-          }
-        });
-        console.log('Transcription error listener setup complete');
-      } catch (error) {
-        console.error('Failed to setup transcription error listener:', error);
-      }
-    };
-
-    setupTranscriptionErrorListener();
-
-    return () => {
-      console.log('Cleaning up transcription error listener...');
-      if (unlistenFn) {
-        unlistenFn();
-      }
-    };
-  }, []);
 
   useEffect(() => {
     const loadModels = async () => {
@@ -708,9 +359,10 @@ export default function Home() {
       const randomTitle = `Meeting ${day}_${month}_${year}_${hours}_${minutes}_${seconds}`;
       setMeetingTitle(randomTitle);
 
-      // Update state - the actual recording is already started by RecordingControls
-      console.log('Setting isRecordingState to true');
-      setIsRecordingState(true); // This will also update the sidebar via the useEffect
+      // Update state
+      console.log('Setting recording state to true');
+      setIsRecording(true);
+
       setTranscripts([]); // Clear previous transcripts when starting new recording
       setIsMeetingActive(true);
       Analytics.trackButtonClick('start_recording', 'home_page');
@@ -720,7 +372,7 @@ export default function Home() {
     } catch (error) {
       console.error('Failed to start recording:', error);
       alert('Failed to start recording. Check console for details.');
-      setIsRecordingState(false); // Reset state on error
+      setIsRecording(false);
       Analytics.trackButtonClick('start_recording_error', 'home_page');
     }
   };
@@ -733,379 +385,113 @@ export default function Home() {
         if (shouldAutoStart === 'true' && !isRecording && !isMeetingActive) {
           console.log('Auto-starting recording from navigation...');
           sessionStorage.removeItem('autoStartRecording'); // Clear the flag
-
-          // Start the actual backend recording
-          try {
-            const { invoke } = await import('@tauri-apps/api/core');
-
-            // Generate meeting title
-            const now = new Date();
-            const day = String(now.getDate()).padStart(2, '0');
-            const month = String(now.getMonth() + 1).padStart(2, '0');
-            const year = String(now.getFullYear()).slice(-2);
-            const hours = String(now.getHours()).padStart(2, '0');
-            const minutes = String(now.getMinutes()).padStart(2, '0');
-            const seconds = String(now.getSeconds()).padStart(2, '0');
-            const generatedMeetingTitle = `Meeting ${day}_${month}_${year}_${hours}_${minutes}_${seconds}`;
-
-            console.log('Auto-starting backend recording with meeting:', generatedMeetingTitle);
-            const result = await invoke('start_recording_with_devices_and_meeting', {
-              mic_device_name: selectedDevices?.micDevice || null,
-              system_device_name: selectedDevices?.systemDevice || null,
-              meeting_name: generatedMeetingTitle
-            });
-            console.log('Auto-start backend recording result:', result);
-
-            // Update UI state after successful backend start
-            setMeetingTitle(generatedMeetingTitle);
-            setIsRecordingState(true);
-            setTranscripts([]);
-            setIsMeetingActive(true);
-            Analytics.trackButtonClick('start_recording', 'sidebar_auto');
-
-            // Show recording notification if enabled
-            await showRecordingNotification();
-          } catch (error) {
-            console.error('Failed to auto-start recording:', error);
-            alert('Failed to start recording. Check console for details.');
-            Analytics.trackButtonClick('start_recording_error', 'sidebar_auto');
-          }
+          handleRecordingStart();
         }
       }
     };
 
     checkAutoStartRecording();
-  }, [isRecording, isMeetingActive, selectedDevices]);
+  }, [isRecording, isMeetingActive]);
 
-  const handleRecordingStop = async () => {
+
+  // Stop recording and save audio
+
+
+  const handleWebAudioRecordingStop = async () => {
+    console.log('💾 [Web Audio] Saving meeting to database...');
+    setSummaryStatus('processing');
+    setIsSavingTranscript(true);
+
     try {
-      console.log('Stopping recording...');
-      const { invoke } = await import('@tauri-apps/api/core');
-      const { appDataDir } = await import('@tauri-apps/api/path');
+      const freshTranscripts = transcriptsRef.current;
 
-      const dataDir = await appDataDir();
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const transcriptPath = `${dataDir}transcript-${timestamp}.txt`;
-      const audioPath = `${dataDir}recording-${timestamp}.wav`;
-
-      // Stop recording and save audio
-      await invoke('stop_recording', {
-        args: {
-          save_path: audioPath,
-          model_config: modelConfig
-        }
-      });
-      console.log('Recording stopped successfully');
-
-      // Format and save transcript
-      const formattedTranscript = transcripts
-        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-        .map(t => `[${t.timestamp}] ${t.text}`)
-        .join('\n\n');
-
-      // const documentContent = `Meeting Title: ${meetingTitle}\nDate: ${new Date().toLocaleString()}\n\nTranscript:\n${formattedTranscript}`;
-
-      // await invoke('save_transcript', { 
-      //   filePath: transcriptPath,
-      //   content: documentContent
-      // });
-      // console.log('Transcript saved to:', transcriptPath);
-
-      setIsRecordingState(false);
-
-      // Show summary button if we have transcript content
-      if (formattedTranscript.trim()) {
-        setShowSummary(true);
-      } else {
-        console.log('No transcript content available');
-      }
-    } catch (error) {
-      console.error('Failed to stop recording:', error);
-      if (error instanceof Error) {
-        console.error('Error details:', {
-          message: error.message,
-          name: error.name,
-          stack: error.stack,
+      if (freshTranscripts.length === 0) {
+        console.warn('No transcripts to save');
+        toast.error('No transcripts to save', {
+          description: 'Recording was too short or no speech was detected.'
         });
+        return;
       }
-      alert('Failed to stop recording. Check console for details.');
-      setIsRecordingState(false); // Reset state on error
+
+      console.log(`💾 Saving ${freshTranscripts.length} transcripts via HTTP API...`);
+
+      // Call backend API directly
+      const response = await fetch('http://localhost:5167/save-transcript', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          meeting_title: meetingTitle || 'Web Audio Meeting',
+          transcripts: freshTranscripts.map((t, index) => ({
+            id: t.id || `transcript-${Date.now()}-${Math.random().toString(36).substring(2, 9)}-${index}`,
+            text: t.text,
+            timestamp: t.timestamp,
+            audio_start_time: 0,
+            audio_end_time: 0,
+            duration: 0,
+          })),
+          folder_path: null,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to save meeting: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const meetingId = data.meeting_id;
+
+      console.log('✅ [Web Audio] Meeting saved with ID:', meetingId);
+
+      // Update UI
+      await refetchMeetings();
+      setCurrentMeeting({
+        id: meetingId,
+        title: meetingTitle || 'Web Audio Meeting'
+      });
+
+      toast.success('Recording saved successfully!', {
+        description: `${freshTranscripts.length} transcript segments saved.`,
+        action: {
+          label: 'View Meeting',
+          onClick: () => {
+            router.push(`/meeting-details?id=${meetingId}`);
+            Analytics.trackButtonClick('view_meeting_from_toast', 'recording_complete');
+          }
+        },
+        duration: 10000,
+      });
+
+      // Auto-navigate after delay
+      setTimeout(() => {
+        router.push(`/meeting-details?id=${meetingId}`);
+        Analytics.trackPageView('meeting_details');
+      }, 2000);
+
+      setMeetings([{ id: meetingId, title: meetingTitle || 'Web Audio Meeting' }, ...meetings]);
+
+    } catch (error) {
+      console.error('❌ [Web Audio] Failed to save meeting:', error);
+      toast.error('Failed to save recording', {
+        description: error instanceof Error ? error.message : 'Unknown error'
+      });
+    } finally {
+      setSummaryStatus('idle');
+      setIsSavingTranscript(false);
+      setIsProcessingTranscript(false);
+      setIsRecordingDisabled(false);
+      setIsStopping(false);
     }
   };
 
-  const handleRecordingStop2 = async (isCallApi: boolean) => {
+  const handleRecordingStop = async (success: boolean = true) => {
     // Immediately update UI state to reflect that recording has stopped
-    // Note: setIsStopping(true) is now called via onStopInitiated callback before this function
-    setIsRecordingState(false);
-    setIsRecordingDisabled(true);
-    setIsProcessingTranscript(true); // Immediately set processing flag for UX
-    const stopStartTime = Date.now();
-    try {
-      console.log('Post-stop processing (new implementation)...', {
-        stop_initiated_at: new Date(stopStartTime).toISOString(),
-        current_transcript_count: transcripts.length
-      });
-      const { invoke } = await import('@tauri-apps/api/core');
-      const { appDataDir } = await import('@tauri-apps/api/path');
-      const { listen } = await import('@tauri-apps/api/event');
+    setIsRecording(false);
+    setIsRecordingDisabled(false);
 
-      // Note: stop_recording is already called by RecordingControls.stopRecordingAction
-      // This function only handles post-stop processing (transcription wait, API call, navigation)
-      console.log('Recording already stopped by RecordingControls, processing transcription...');
-
-      // Wait for transcription to complete
-      setSummaryStatus('processing');
-      console.log('Waiting for transcription to complete...');
-
-      const MAX_WAIT_TIME = 60000; // 60 seconds maximum wait (increased for longer processing)
-      const POLL_INTERVAL = 500; // Check every 500ms
-      let elapsedTime = 0;
-      let transcriptionComplete = false;
-
-      // Listen for transcription-complete event
-      const unlistenComplete = await listen('transcription-complete', () => {
-        console.log('Received transcription-complete event');
-        transcriptionComplete = true;
-      });
-
-      // Removed LATE transcript listener - relying on main buffered transcript system instead
-
-      // Poll for transcription status
-      while (elapsedTime < MAX_WAIT_TIME && !transcriptionComplete) {
-        try {
-          const status = await invoke<{ chunks_in_queue: number, is_processing: boolean, last_activity_ms: number }>('get_transcription_status');
-          console.log('Transcription status:', status);
-
-          // Check if transcription is complete
-          if (!status.is_processing && status.chunks_in_queue === 0) {
-            console.log('Transcription complete - no active processing and no chunks in queue');
-            transcriptionComplete = true;
-            break;
-          }
-
-          // If no activity for more than 8 seconds and no chunks in queue, consider it done (increased from 5s to 8s)
-          if (status.last_activity_ms > 8000 && status.chunks_in_queue === 0) {
-            console.log('Transcription likely complete - no recent activity and empty queue');
-            transcriptionComplete = true;
-            break;
-          }
-
-          // Update user with current status
-          if (status.chunks_in_queue > 0) {
-            console.log(`Processing ${status.chunks_in_queue} remaining audio chunks...`);
-            setSummaryStatus('processing');
-          }
-
-          // Wait before next check
-          await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
-          elapsedTime += POLL_INTERVAL;
-        } catch (error) {
-          console.error('Error checking transcription status:', error);
-          break;
-        }
-      }
-
-      // Clean up listener
-      console.log('🧹 CLEANUP: Cleaning up transcription-complete listener');
-      unlistenComplete();
-
-      if (!transcriptionComplete && elapsedTime >= MAX_WAIT_TIME) {
-        console.warn('⏰ Transcription wait timeout reached after', elapsedTime, 'ms');
-      } else {
-        console.log('✅ Transcription completed after', elapsedTime, 'ms');
-        // Wait longer for any late transcript segments (increased from 1s to 4s)
-        console.log('⏳ Waiting for late transcript segments...');
-        await new Promise(resolve => setTimeout(resolve, 4000));
-      }
-
-      // LATE transcript listener removed - no cleanup needed
-
-      // Final buffer flush: process ALL remaining transcripts regardless of timing
-      const flushStartTime = Date.now();
-      console.log('🔄 Final buffer flush: forcing processing of any remaining transcripts...', {
-        flush_started_at: new Date(flushStartTime).toISOString(),
-        time_since_stop: flushStartTime - stopStartTime,
-        current_transcript_count: transcripts.length
-      });
-      if (finalFlushRef.current) {
-        finalFlushRef.current();
-        const flushEndTime = Date.now();
-        console.log('✅ Final buffer flush completed', {
-          flush_duration: flushEndTime - flushStartTime,
-          total_time_since_stop: flushEndTime - stopStartTime,
-          final_transcript_count: transcripts.length
-        });
-      } else {
-        console.log('⚠️ Final flush function not available');
-      }
-
-      setSummaryStatus('idle');
-      setIsProcessingTranscript(false); // Reset processing flag
-      setIsStopping(false); // Reset stopping flag
-
-      // Wait a bit more to ensure all transcript state updates have been processed
-      console.log('Waiting for transcript state updates to complete...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Save to SQLite
-      // NOTE: enabled to save COMPLETE transcripts after frontend receives all updates
-      // This ensures user sees all transcripts streaming in before database save
-      if (isCallApi && transcriptionComplete == true) {
-
-        setIsSavingTranscript(true);
-
-        // Get fresh transcript state (ALL transcripts including late ones)
-        const freshTranscripts = [...transcriptsRef.current];
-
-        // Get folder_path and meeting_name from recording-stopped event
-        const folderPath = sessionStorage.getItem('last_recording_folder_path');
-        const savedMeetingName = sessionStorage.getItem('last_recording_meeting_name');
-
-        console.log('💾 Saving COMPLETE transcripts to database...', {
-          transcript_count: freshTranscripts.length,
-          meeting_name: meetingTitle || savedMeetingName,
-          folder_path: folderPath,
-          sample_text: freshTranscripts.length > 0 ? freshTranscripts[0].text.substring(0, 50) + '...' : 'none',
-          last_transcript: freshTranscripts.length > 0 ? freshTranscripts[freshTranscripts.length - 1].text.substring(0, 30) + '...' : 'none',
-        });
-
-        try {
-          const responseData = await invoke('api_save_transcript', {
-            meetingTitle: meetingTitle || savedMeetingName,
-            transcripts: freshTranscripts, 
-            folderPath: folderPath, 
-          }) as any;
-
-          const meetingId = responseData.meeting_id;
-          if (!meetingId) {
-            console.error('No meeting_id in response:', responseData);
-            throw new Error('No meeting ID received from save operation');
-          }
-
-          console.log('✅ Successfully saved COMPLETE meeting with ID:', meetingId);
-          console.log('   Transcripts:', freshTranscripts.length);
-          console.log('   folder_path:', folderPath);
-
-          // Clean up session storage
-          sessionStorage.removeItem('last_recording_folder_path');
-          sessionStorage.removeItem('last_recording_meeting_name');
-
-          // Refetch meetings and set current meeting
-          await refetchMeetings();
-
-          try {
-            const meetingData = await invoke('api_get_meeting', { meetingId }) as any;
-            if (meetingData) {
-              setCurrentMeeting({
-                id: meetingId,
-                title: meetingData.title
-              });
-              console.log('✅ Current meeting set:', meetingData.title);
-            }
-          } catch (error) {
-            console.warn('Could not fetch meeting details, using ID only:', error);
-            setCurrentMeeting({ id: meetingId, title: meetingTitle || 'New Meeting' });
-          }
-
-          // Show success toast with navigation option
-          toast.success('Recording saved successfully!', {
-            description: `${freshTranscripts.length} transcript segments saved.`,
-            action: {
-              label: 'View Meeting',
-              onClick: () => {
-                router.push(`/meeting-details?id=${meetingId}`);
-                Analytics.trackButtonClick('view_meeting_from_toast', 'recording_complete');
-              }
-            },
-            duration: 10000,
-          });
-
-          // Auto-navigate after a short delay
-          setTimeout(() => {
-            router.push(`/meeting-details?id=${meetingId}`);
-            Analytics.trackPageView('meeting_details');
-          }, 2000);
-
-          setMeetings([{ id: meetingId, title: meetingTitle || savedMeetingName || 'New Meeting' }, ...meetings]);
-
-          // Track meeting completion analytics
-          try {
-            // Calculate meeting duration from transcript timestamps
-          let durationSeconds = 0;
-          if (freshTranscripts.length > 0 && freshTranscripts[0].audio_start_time !== undefined) {
-            // Use audio_end_time of last transcript if available
-            const lastTranscript = freshTranscripts[freshTranscripts.length - 1];
-            durationSeconds = lastTranscript.audio_end_time || lastTranscript.audio_start_time || 0;
-          }
-
-          // Calculate word count
-          const transcriptWordCount = freshTranscripts
-            .map(t => t.text.split(/\s+/).length)
-            .reduce((a, b) => a + b, 0);
-
-          // Calculate words per minute
-          const wordsPerMinute = durationSeconds > 0 ? transcriptWordCount / (durationSeconds / 60) : 0;
-
-          // Get meetings count today
-          const meetingsToday = await Analytics.getMeetingsCountToday();
-
-          // Track meeting completed
-          await Analytics.trackMeetingCompleted(meetingId, {
-            duration_seconds: durationSeconds,
-            transcript_segments: freshTranscripts.length,
-            transcript_word_count: transcriptWordCount,
-            words_per_minute: wordsPerMinute,
-            meetings_today: meetingsToday
-          });
-
-          // Update meeting count in analytics.json
-          await Analytics.updateMeetingCount();
-
-          // Check for activation (first meeting)
-          const { Store } = await import('@tauri-apps/plugin-store');
-          const store = await Store.load('analytics.json');
-          const totalMeetings = await store.get<number>('total_meetings');
-
-          if (totalMeetings === 1) {
-            const daysSinceInstall = await Analytics.calculateDaysSince('first_launch_date');
-            await Analytics.track('user_activated', {
-              meetings_count: '1',
-              days_since_install: daysSinceInstall?.toString() || 'null',
-              first_meeting_duration_seconds: durationSeconds.toString()
-            });
-          }
-        } catch (analyticsError) {
-          console.error('Failed to track meeting completion analytics:', analyticsError);
-          // Don't block user flow on analytics errors
-        }
-
-        } catch (saveError) {
-          console.error('Failed to save meeting to database:', saveError);
-          toast.error('Failed to save meeting', {
-            description: saveError instanceof Error ? saveError.message : 'Unknown error'
-          });
-          throw saveError;
-        } finally {
-          setIsSavingTranscript(false);
-        }
-      }
-      setIsMeetingActive(false);
-      // isRecordingState already set to false at function start
-      setIsRecordingDisabled(false);
-      // Show summary button if we have transcript content
-      if (transcripts.length > 0) {
-        setShowSummary(true);
-      } else {
-        console.log('No transcript content available');
-      }
-    } catch (error) {
-      console.error('Error in handleRecordingStop2:', error);
-      // isRecordingState already set to false at function start
-      setSummaryStatus('idle');
-      setIsProcessingTranscript(false); // Reset on error
-      setIsStopping(false); // Reset stopping flag on error
-      setIsSavingTranscript(false);
-      setIsRecordingDisabled(false);
+    if (success) {
+      await handleWebAudioRecordingStop();
     }
   };
 
@@ -1166,17 +552,24 @@ export default function Home() {
 
       console.log('Generating summary for transcript length:', fullTranscript.length);
 
-      // Process transcript and get process_id
+      // Process transcript
       console.log('Processing transcript...');
-      const result = await invoke('api_process_transcript', {
-        text: fullTranscript,
-        model: modelConfig.provider,
-        modelName: modelConfig.model,
-        chunkSize: 40000,
-        overlap: 1000,
-        customPrompt: prompt,
-      }) as any;
+      const processResponse = await fetch(`${serverAddress}/process-transcript`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: fullTranscript,
+          model: modelConfig.provider,
+          modelName: modelConfig.model,
+          chunkSize: 40000,
+          overlap: 1000,
+          customPrompt: prompt,
+        })
+      });
 
+      if (!processResponse.ok) throw new Error('Failed to start processing');
+
+      const result = await processResponse.json();
       const process_id = result.process_id;
       console.log('Process ID:', process_id);
 
@@ -1184,9 +577,8 @@ export default function Home() {
       // Poll for summary status
       const pollInterval = setInterval(async () => {
         try {
-          const result = await invoke('api_get_summary', {
-            meetingId: process_id,
-          }) as any;
+          const summaryResponse = await fetch(`${serverAddress}/get-summary/${process_id}`);
+          const result = await summaryResponse.json();
           console.log('Summary status:', result);
 
           if (result.status === 'error') {
@@ -1248,7 +640,7 @@ export default function Home() {
       }
       setSummaryStatus('error');
     }
-  }, [transcripts, modelConfig]);
+  }, [transcripts, modelConfig, serverAddress]);
 
   const handleSummary = useCallback((summary: any) => {
     setAiSummary(summary);
@@ -1296,17 +688,21 @@ export default function Home() {
       const sanitizedTitle = meetingTitle.replace(/[^a-zA-Z0-9]/g, '_');
       const filename = `${sanitizedTitle}_transcript.json`;
 
-      // Get download directory path
-      const downloadPath = await downloadDir();
+      // Create blob and download link
+      const blob = new Blob([JSON.stringify(transcriptData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
 
-      // Write file to downloads directory
-      await writeTextFile(`${downloadPath}/${filename}`, JSON.stringify(transcriptData, null, 2));
-
-      console.log('Transcript saved successfully to:', `${downloadPath}/${filename}`);
-      alert('Transcript downloaded successfully!');
+      console.log('Transcript downloaded successfully');
     } catch (error) {
-      console.error('Failed to save transcript:', error);
-      alert('Failed to save transcript. Please try again.');
+      console.error('Failed to download transcript:', error);
+      alert('Failed to download transcript. Please try again.');
     }
   };
 
@@ -1347,25 +743,31 @@ export default function Home() {
     try {
       console.log('Regenerating summary with original transcript...');
 
-      // Process transcript and get process_id
+      // Process transcript
       console.log('Processing transcript...');
-      const result = await invoke('api_process_transcript', {
-        text: originalTranscript,
-        model: modelConfig.provider,
-        modelName: modelConfig.model,
-        chunkSize: 40000,
-        overlap: 1000,
-      }) as any;
+      const processResponse = await fetch(`${serverAddress}/process-transcript`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: originalTranscript,
+          model: modelConfig.provider,
+          modelName: modelConfig.model,
+          chunkSize: 40000,
+          overlap: 1000,
+        })
+      });
 
+      if (!processResponse.ok) throw new Error('Failed to start processing');
+
+      const result = await processResponse.json();
       const process_id = result.process_id;
       console.log('Process ID:', process_id);
 
       // Poll for summary status
       const pollInterval = setInterval(async () => {
         try {
-          const result = await invoke('api_get_summary', {
-            meetingId: process_id,
-          }) as any;
+          const summaryResponse = await fetch(`${serverAddress}/get-summary/${process_id}`);
+          const result = await summaryResponse.json();
           console.log('Summary status:', result);
 
           if (result.status === 'error') {
@@ -1430,7 +832,7 @@ export default function Home() {
       setSummaryStatus('error');
       setAiSummary(null);
     }
-  }, [originalTranscript, modelConfig]);
+  }, [originalTranscript, modelConfig, serverAddress]);
 
   const handleCopyTranscript = useCallback(() => {
     // Format timestamps as recording-relative [MM:SS] instead of wall-clock time
@@ -1471,12 +873,8 @@ export default function Home() {
   // Handle transcript configuration save
   const handleSaveTranscriptConfig = async (config: TranscriptModelProps) => {
     try {
-      console.log('[HomePage] Saving transcript config:', config);
-      await invoke('api_save_transcript_config', {
-        provider: config.provider,
-        model: config.model,
-        apiKey: config.apiKey
-      });
+      console.log('[HomePage] Saving transcript config to localStorage:', config);
+      localStorage.setItem('transcript_config', JSON.stringify(config));
       console.log('[HomePage] ✅ Successfully saved transcript config');
     } catch (error) {
       console.error('[HomePage] ❌ Failed to save transcript config:', error);
@@ -1493,98 +891,45 @@ export default function Home() {
     window.dispatchEvent(new CustomEvent('confidenceIndicatorChanged', { detail: checked }));
   };
 
-  // Listen for model download completion to auto-close modal
-  useEffect(() => {
-    const setupDownloadListeners = async () => {
-      const unlisteners: (() => void)[] = [];
 
-      // Listen for Whisper model download complete
-      const unlistenWhisper = await listen<{ modelName: string }>('model-download-complete', (event) => {
-        const { modelName } = event.payload;
-        console.log('[HomePage] Whisper model download complete:', modelName);
-
-        // Auto-close modal if the downloaded model matches the selected one
-        if (transcriptModelConfig.provider === 'localWhisper' && transcriptModelConfig.model === modelName) {
-          toast.success('Model ready! Closing window...', { duration: 1500 });
-          setTimeout(() => setShowModelSelector(false), 1500);
-        }
-      });
-      unlisteners.push(unlistenWhisper);
-
-      // Listen for Parakeet model download complete
-      const unlistenParakeet = await listen<{ modelName: string }>('parakeet-model-download-complete', (event) => {
-        const { modelName } = event.payload;
-        console.log('[HomePage] Parakeet model download complete:', modelName);
-
-        // Auto-close modal if the downloaded model matches the selected one
-        if (transcriptModelConfig.provider === 'parakeet' && transcriptModelConfig.model === modelName) {
-          toast.success('Model ready! Closing window...', { duration: 1500 });
-          setTimeout(() => setShowModelSelector(false), 1500);
-        }
-      });
-      unlisteners.push(unlistenParakeet);
-
-      return () => {
-        unlisteners.forEach(unsub => unsub());
-      };
-    };
-
-    setupDownloadListeners();
-  }, [transcriptModelConfig]);
 
   const isSummaryLoading = summaryStatus === 'processing' || summaryStatus === 'summarizing' || summaryStatus === 'regenerating';
 
   const isProcessingStop = summaryStatus === 'processing' || isProcessingTranscript
-  const handleRecordingStop2Ref = useRef(handleRecordingStop2);
-  const handleRecordingStartRef = useRef(handleRecordingStart);
-  useEffect(() => {
-    handleRecordingStop2Ref.current = handleRecordingStop2;
-    handleRecordingStartRef.current = handleRecordingStart;
-  });
-
-  // Expose handleRecordingStop and handleRecordingStart functions to rust using refs for stale closure issues
-  useEffect(() => {
-    (window as any).handleRecordingStop = (callApi: boolean = true) => {
-      handleRecordingStop2Ref.current(callApi);
-    };
-
-    // Cleanup on unmount
-    return () => {
-      delete (window as any).handleRecordingStop;
-    };
-  }, []);
-
   useEffect(() => {
     // Honor saved model settings from backend (including OpenRouter)
     const fetchModelConfig = async () => {
       try {
-        const data = await invoke('api_get_model_config') as any;
-        if (data && data.provider) {
-          setModelConfig(prev => ({
-            ...prev,
-            provider: data.provider,
-            model: data.model || prev.model,
-            whisperModel: data.whisperModel || prev.whisperModel,
-          }));
+        const response = await fetch(`${serverAddress}/get-model-config`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.provider) {
+            setModelConfig(prev => ({
+              ...prev,
+              provider: data.provider,
+              model: data.model || prev.model,
+              whisperModel: data.whisperModel || prev.whisperModel,
+            }));
+          }
         }
       } catch (error) {
         console.error('Failed to fetch saved model config in page.tsx:', error);
       }
     };
-    fetchModelConfig();
-  }, []);
+    if (serverAddress) fetchModelConfig();
+  }, [serverAddress]);
 
   // Load device preferences on startup
   useEffect(() => {
     const loadDevicePreferences = async () => {
       try {
-        const prefs = await invoke('get_recording_preferences') as any;
-        if (prefs && (prefs.preferred_mic_device || prefs.preferred_system_device)) {
-          setSelectedDevices({
-            micDevice: prefs.preferred_mic_device,
-            systemDevice: prefs.preferred_system_device
-          });
-          console.log('Loaded device preferences:', prefs);
+        const savedDevices = localStorage.getItem('device_preferences');
+        if (savedDevices) {
+          const prefs = JSON.parse(savedDevices);
+          if (prefs && (prefs.micDevice || prefs.systemDevice)) {
+            setSelectedDevices(prefs);
+            console.log('Loaded device preferences from localStorage:', prefs);
+          }
         }
       } catch (error) {
         console.log('No device preferences found or failed to load:', error);
@@ -1597,14 +942,15 @@ export default function Home() {
   useEffect(() => {
     const loadLanguagePreference = async () => {
       try {
-        const language = await invoke('get_language_preference') as string;
-        if (language) {
-          setSelectedLanguage(language);
-          console.log('Loaded language preference:', language);
+        const savedLanguage = localStorage.getItem('language_preference');
+        if (savedLanguage) {
+          setSelectedLanguage(savedLanguage);
+          console.log('Loaded language preference:', savedLanguage);
+        } else {
+          setSelectedLanguage('auto-translate');
         }
       } catch (error) {
         console.log('No language preference found or failed to load, using default (auto-translate):', error);
-        // Default to 'auto-translate' (Auto Detect with English translation) if no preference is saved
         setSelectedLanguage('auto-translate');
       }
     };
@@ -1659,22 +1005,22 @@ export default function Home() {
               <div className="flex  flex-col space-y-2">
                 <div className="flex justify-center  items-center space-x-2">
                   <ButtonGroup>
-                  {transcripts?.length > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        handleCopyTranscript();
-                      }}
-                      title="Copy Transcript"
-                    >
-                      <Copy />
-                      <span className='hidden md:inline'>
-                        Copy
-                      </span>
-                    </Button>
-                  )}
-                  {/* {!isRecording && transcripts?.length === 0 && ( */}
+                    {transcripts?.length > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          handleCopyTranscript();
+                        }}
+                        title="Copy Transcript"
+                      >
+                        <Copy />
+                        <span className='hidden md:inline'>
+                          Copy
+                        </span>
+                      </Button>
+                    )}
+                    {/* {!isRecording && transcripts?.length === 0 && ( */}
                     <Button
                       variant="outline"
                       size="sm"
@@ -1686,29 +1032,29 @@ export default function Home() {
                         Model
                       </span>
                     </Button>
-                  
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setShowDeviceSettings(true)}
-                    title="Input/Output devices selection"
-                  >
-                    <MicrophoneIcon />
-                    <span className='hidden md:inline'>
-                      Devices
-                    </span>
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setShowLanguageSettings(true)}
-                    title="Language"
-                  >
-                    <GlobeIcon />
-                    <span className='hidden md:inline'>
-                      Language
-                    </span>
-                  </Button>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowDeviceSettings(true)}
+                      title="Input/Output devices selection"
+                    >
+                      <MicrophoneIcon />
+                      <span className='hidden md:inline'>
+                        Devices
+                      </span>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowLanguageSettings(true)}
+                      title="Language"
+                    >
+                      <GlobeIcon />
+                      <span className='hidden md:inline'>
+                        Language
+                      </span>
+                    </Button>
                   </ButtonGroup>
                   {/* {showSummary && !isRecording && (
                     <>
@@ -1814,17 +1160,8 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Permission Warning */}
-          {!isRecording && !isCheckingPermissions && (
-            <div className="flex justify-center px-4 pt-4">
-              <PermissionWarning
-                hasMicrophone={hasMicrophone}
-                hasSystemAudio={hasSystemAudio}
-                onRecheck={checkPermissions}
-                isRechecking={isCheckingPermissions}
-              />
-            </div>
-          )}
+          {/* Permission Warning (only for Tauri mode) */}
+
 
           {/* Transcript content */}
           <div className="pb-20">
@@ -1832,11 +1169,11 @@ export default function Home() {
               <div className="w-2/3 max-w-[750px]">
                 <TranscriptView
                   transcripts={transcripts}
-                  isRecording={recordingState.isRecording}
-                  isPaused={recordingState.isPaused}
+                  isRecording={isRecording}
+                  isPaused={false}
                   isProcessing={isProcessingStop}
                   isStopping={isStopping}
-                  enableStreaming={recordingState.isRecording }
+                  enableStreaming={isRecording}
                 />
               </div>
             </div>
@@ -1856,7 +1193,7 @@ export default function Home() {
           )} */}
 
           {/* Recording controls - only show when permissions are granted or already recording and not showing status messages */}
-          {(hasMicrophone || isRecording) && !isProcessingStop && !isSavingTranscript && (
+          {(!isProcessingStop && !isSavingTranscript) && (
             <div className="fixed bottom-12 left-0 right-0 z-10">
               <div
                 className="flex justify-center pl-8 transition-[margin] duration-300"
@@ -1867,21 +1204,21 @@ export default function Home() {
                 <div className="w-2/3 max-w-[750px] flex justify-center">
                   <div className="bg-white rounded-full shadow-lg flex items-center">
                     <RecordingControls
-                  isRecording={recordingState.isRecording}
-                  onRecordingStop={(callApi = true) => handleRecordingStop2(callApi)}
-                  onRecordingStart={handleRecordingStart}
-                  onTranscriptReceived={handleTranscriptUpdate}
-                  onStopInitiated={() => setIsStopping(true)}
-                  barHeights={barHeights}
-                  onTranscriptionError={(message) => {
-                    setErrorMessage(message);
-                    setShowErrorAlert(true);
-                  }}
-                  isRecordingDisabled={isRecordingDisabled}
-                  isParentProcessing={isProcessingStop}
-                  selectedDevices={selectedDevices}
-                  meetingName={meetingTitle}
-                />
+                      isRecording={isRecording}
+                      onRecordingStop={(success) => handleRecordingStop(success)}
+                      onRecordingStart={handleRecordingStart}
+                      onTranscriptReceived={handleTranscriptUpdate}
+                      onStopInitiated={() => setIsStopping(true)}
+                      barHeights={barHeights}
+                      onTranscriptionError={(message) => {
+                        setErrorMessage(message);
+                        setShowErrorAlert(true);
+                      }}
+                      isRecordingDisabled={isRecordingDisabled}
+                      isParentProcessing={isProcessingStop}
+                      selectedDevices={selectedDevices}
+                      meetingName={meetingTitle}
+                    />
                   </div>
                 </div>
               </div>

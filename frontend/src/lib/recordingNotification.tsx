@@ -12,9 +12,7 @@ import Analytics from '@/lib/analytics';
  */
 export async function showRecordingNotification(): Promise<void> {
   try {
-    const { Store } = await import('@tauri-apps/plugin-store');
-    const store = await Store.load('preferences.json');
-    const showNotification = await store.get<boolean>('show_recording_notification') ?? true;
+    const showNotification = localStorage.getItem('show_recording_notification') !== 'false';
 
     if (showNotification) {
       let dontShowAgain = false;
@@ -36,12 +34,9 @@ export async function showRecordingNotification(): Promise<void> {
               <span className="select-none text-gray-700">Don't show this again</span>
             </label>
             <button
-              onClick={async () => {
+              onClick={() => {
                 if (dontShowAgain) {
-                  const { Store } = await import('@tauri-apps/plugin-store');
-                  const store = await Store.load('preferences.json');
-                  await store.set('show_recording_notification', false);
-                  await store.save();
+                  localStorage.setItem('show_recording_notification', 'false');
                 }
                 Analytics.trackButtonClick('recording_notification_acknowledged', 'toast');
                 toast.dismiss(toastId);

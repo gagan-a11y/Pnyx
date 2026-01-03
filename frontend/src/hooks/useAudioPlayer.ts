@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 
 export const useAudioPlayer = (audioPath: string | null) => {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -72,26 +71,29 @@ export const useAudioPlayer = (audioPath: string | null) => {
 
       console.log('Loading audio from:', audioPath);
       
-      // Read the file using Tauri command
-      const result = await invoke<number[]>('read_audio_file', { 
-        filePath: audioPath 
-      });
+      // Fetch audio file (assumed to be a URL accessible to web)
+      // If audioPath is just a filename, prepend the server endpoint
       
-      if (!result || result.length === 0) {
-        throw new Error('Empty audio data received');
-      }
+      let url = audioPath;
+       // Quick Hack: attempt to determine if it's absolute or needing server prefix.
+       // But hook doesn't know server address.
+       // Assuming audioPath passed by Sidebar is already a full URL or relative to public.
+       // Actually `useSidebar` likely passes a path.
+       // If it's a file path /home/..., fetching won't work.
+       // But we refactored Sidebar to get meetings from backend. Backend should return URLs.
+       // We'll assume audioPath is fetchable.
+       
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('Failed to fetch audio file');
       
-      console.log('Audio file read, size:', result.length, 'bytes');
+      const arrayBuffer = await response.arrayBuffer();
       
-      // Create a copy of the audio data
-      const audioData = new Uint8Array(result).buffer;
-      
-      console.log('Created audio buffer, size:', audioData.byteLength, 'bytes');
+      console.log('Audio file fetched, size:', arrayBuffer.byteLength, 'bytes');
       
       // Decode the audio data
       const audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
         audioRef.current!.decodeAudioData(
-          audioData,
+          arrayBuffer,
           buffer => {
             console.log('Audio decoded successfully:', {
               duration: buffer.duration,
@@ -115,13 +117,6 @@ export const useAudioPlayer = (audioPath: string | null) => {
       console.log('Audio loaded and ready to play');
     } catch (error) {
       console.error('Error loading audio:', error);
-      if (error instanceof Error) {
-        console.error('Error details:', {
-          message: error.message,
-          name: error.name,
-          stack: error.stack,
-        });
-      }
       setError('Failed to load audio file');
     }
   };
@@ -168,7 +163,8 @@ export const useAudioPlayer = (audioPath: string | null) => {
         throw new Error('No audio buffer loaded - try loading the audio file first');
       }
       if (audioRef.current.state !== 'running') {
-        throw new Error(`Audio context is in invalid state: ${audioRef.current.state}`);
+          // Attempt resume
+          await audioRef.current.resume();
       }
 
       // Stop any existing playback
@@ -178,13 +174,6 @@ export const useAudioPlayer = (audioPath: string | null) => {
       console.log('Creating new audio source');
       sourceRef.current = audioRef.current.createBufferSource();
       sourceRef.current.buffer = audioBufferRef.current;
-      
-      console.log('Audio buffer details:', {
-        duration: audioBufferRef.current.duration,
-        sampleRate: audioBufferRef.current.sampleRate,
-        numberOfChannels: audioBufferRef.current.numberOfChannels,
-        length: audioBufferRef.current.length
-      });
       
       sourceRef.current.connect(audioRef.current.destination);
       
@@ -198,11 +187,6 @@ export const useAudioPlayer = (audioPath: string | null) => {
       // Start playback from the seek time
       const startTime = seekTimeRef.current;
       startTimeRef.current = audioRef.current.currentTime - startTime;
-      console.log('Starting playback', {
-        startTime,
-        contextTime: audioRef.current.currentTime,
-        seekTime: seekTimeRef.current
-      });
       
       sourceRef.current.start(0, startTime);
       setIsPlaying(true);
@@ -211,17 +195,13 @@ export const useAudioPlayer = (audioPath: string | null) => {
       // Setup time update
       const updateTime = () => {
         if (!audioRef.current || !sourceRef.current) {
-          console.log('Update cancelled - context or source is null');
           return;
         }
         
         const newTime = audioRef.current.currentTime - startTimeRef.current;
         
         if (newTime >= duration) {
-          console.log('Playback finished');
-          stopPlayback();
-          setCurrentTime(0);
-          seekTimeRef.current = 0;
+          // Managed by onended
         } else {
           setCurrentTime(newTime);
           seekTimeRef.current = newTime;

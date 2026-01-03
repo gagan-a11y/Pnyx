@@ -317,7 +317,7 @@ export class WebAudioCapture {
    */
   static isSupported(): boolean {
     return !!(
-      navigator.mediaDevices?.getUserMedia() &&
+      navigator.mediaDevices &&
       window.MediaRecorder &&
       window.AudioContext
     );

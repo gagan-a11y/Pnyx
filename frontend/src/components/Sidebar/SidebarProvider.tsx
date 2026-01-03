@@ -3,8 +3,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Analytics from '@/lib/analytics';
-import { invoke } from '@tauri-apps/api/core';
-
 
 interface SidebarItem {
   id: string;
@@ -86,8 +84,15 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const fetchMeetings = React.useCallback(async () => {
     if (serverAddress) {
       try {
-        const meetings = await invoke('api_get_meetings') as Array<{id: string, title: string}>;
-        const transformedMeetings = meetings.map((meeting: any) => ({
+        console.log('[SidebarProvider] Fetching meetings via HTTP API');
+        const response = await fetch(`${serverAddress}/get-meetings`);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const meetingsData = await response.json();
+        console.log('[SidebarProvider] Fetched meetings:', meetingsData);
+
+        const transformedMeetings = meetingsData.map((meeting: any) => ({
           id: meeting.id,
           title: meeting.title
         }));
@@ -107,11 +112,8 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const fetchSettings = async () => {
-        
-        setServerAddress('http://localhost:5167');
-        setTranscriptServerAddress('http://127.0.0.1:8178/stream');
-        
-      
+      setServerAddress('http://localhost:5167');
+      setTranscriptServerAddress('http://127.0.0.1:8178/stream');
     };
     fetchSettings();
   }, []);
@@ -127,7 +129,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     },
   ];
 
- 
+
 
   const toggleCollapse = () => {
     setIsCollapsed(!isCollapsed);
@@ -152,13 +154,13 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       // If not recording, navigate to home page and set flag to start recording automatically
       sessionStorage.setItem('autoStartRecording', 'true');
       router.push('/');
-      
+
       // Track recording initiation from sidebar
       Analytics.trackButtonClick('start_recording', 'sidebar');
     }
     // The actual recording start/stop is handled in the Home component
   };
-  
+
   // Function to search through meeting transcripts
   const searchTranscripts = async (query: string) => {
     if (!query.trim()) {
@@ -168,9 +170,19 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
     try {
       setIsSearching(true);
+      const response = await fetch(`${serverAddress}/search-transcripts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ query })
+      });
 
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
 
-      const results = await invoke('api_search_transcripts', { query }) as TranscriptSearchResult[];
+      const results = await response.json() as TranscriptSearchResult[];
       setSearchResults(results);
     } catch (error) {
       console.error('Error searching transcripts:', error);
@@ -215,9 +227,16 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       try {
-        const result = await invoke('api_get_summary', {
-          meetingId: meetingId,
-        }) as any;
+        const response = await fetch(`${serverAddress}/get-summary/${meetingId}`);
+        if (!response.ok) {
+          // If 202, it's still processing. If error (400/500), it's failed.
+          if (response.status !== 202) {
+            // Handle fetch error as potential failure if not 202
+            // But usually backend returns JSON even on error
+          }
+        }
+
+        const result = await response.json();
 
         console.log(`📊 Polling update for ${meetingId}:`, result.status);
 
@@ -260,7 +279,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     }, 5000); // Poll every 5 seconds
 
     setActiveSummaryPolls(prev => new Map(prev).set(meetingId, pollInterval));
-  }, [activeSummaryPolls]);
+  }, [activeSummaryPolls, serverAddress]);
 
   const stopSummaryPolling = React.useCallback((meetingId: string) => {
     const pollInterval = activeSummaryPolls.get(meetingId);

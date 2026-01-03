@@ -2,8 +2,8 @@ import { useState, useCallback } from 'react';
 import { Transcript, Summary } from '@/types';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
-import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
+
 import Analytics from '@/lib/analytics';
 
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
@@ -63,47 +63,43 @@ export function useSummaryGeneration({
     customPrompt?: string;
     isRegeneration?: boolean;
   }) => {
-    setSummaryStatus(isRegeneration ? 'regenerating' : 'processing');
-    setSummaryError(null);
+      setSummaryStatus(isRegeneration ? 'regenerating' : 'processing');
+      setSummaryError(null);
 
-    try {
-      if (!transcriptText.trim()) {
-        throw new Error('No transcript text available. Please add some text first.');
-      }
+      // Fetch server address from Sidebar context (assuming it's available in scope or passed as prop)
+      // Since it's not in props, we default to localhost:5167 or use a hardcoded value for now 
+      // ideally useSidebar would return serverAddress but useSummaryGeneration calls useSidebar already.
+      const serverAddress = 'http://localhost:5167';
 
-      if (!isRegeneration) {
-        setOriginalTranscript(transcriptText);
-      }
+      try {
+        if (!transcriptText.trim()) {
+          throw new Error('No transcript text available. Please add some text first.');
+        }
 
-      console.log('Processing transcript with template:', selectedTemplate);
+        if (!isRegeneration) {
+          setOriginalTranscript(transcriptText);
+        }
 
-      // Calculate time since recording
-      const timeSinceRecording = (Date.now() - new Date(meeting.created_at).getTime()) / 60000; // minutes
+        console.log('Processing transcript with template:', selectedTemplate);
 
-      // Track summary generation started
-      await Analytics.trackSummaryGenerationStarted(
-        modelConfig.provider,
-        modelConfig.model,
-        transcriptText.length,
-        timeSinceRecording
-      );
+        // Process transcript
+        const response = await fetch(`${serverAddress}/process-transcript`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: transcriptText,
+            model: modelConfig.provider,
+            modelName: modelConfig.model,
+            meetingId: meeting.id,
+            chunkSize: 40000,
+            overlap: 1000,
+            customPrompt: customPrompt,
+            templateId: selectedTemplate,
+          })
+        });
 
-      // Track custom prompt usage if present
-      if (customPrompt.trim().length > 0) {
-        await Analytics.trackCustomPromptUsed(customPrompt.trim().length);
-      }
-
-      // Process transcript and get process_id
-      const result = await invokeTauri('api_process_transcript', {
-        text: transcriptText,
-        model: modelConfig.provider,
-        modelName: modelConfig.model,
-        meetingId: meeting.id,
-        chunkSize: 40000,
-        overlap: 1000,
-        customPrompt: customPrompt,
-        templateId: selectedTemplate,
-      }) as any;
+        if (!response.ok) throw new Error('Failed to start processing');
+        const result = await response.json();
 
       const process_id = result.process_id;
       console.log('Process ID:', process_id);
@@ -287,8 +283,11 @@ export function useSummaryGeneration({
     // Check if Ollama provider has models available
     if (modelConfig.provider === 'ollama') {
       try {
-        const endpoint = modelConfig.ollamaEndpoint || null;
-        const models = await invokeTauri('get_ollama_models', { endpoint }) as any[];
+        // Check Ollama models via HTTP
+        const response = await fetch('http://localhost:11434/api/tags');
+        if (!response.ok) throw new Error('Failed to fetch Ollama models');
+        const data = await response.json();
+        const models = data.models || [];
 
         if (!models || models.length === 0) {
           toast.error(

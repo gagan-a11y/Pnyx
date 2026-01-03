@@ -1,25 +1,24 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useEffect, useState } from 'react';
 
-interface RecordingStatusBarProps {
+// Basic prop based status bar
+export interface RecordingStatusBarProps {
   isPaused?: boolean;
+  isRecording: boolean;
+  activeDuration?: number;
 }
 
-export const RecordingStatusBar: React.FC<RecordingStatusBarProps> = ({ isPaused = false }) => {
-  // Get recording duration from backend-synced context (in seconds)
-  const { activeDuration, isRecording } = useRecordingState();
-
-  // Local state for live timer display
+export const RecordingStatusBar: React.FC<RecordingStatusBarProps> = ({ isPaused = false, isRecording, activeDuration }) => {
+  // Use passed activeDuration or just timer
   const [displaySeconds, setDisplaySeconds] = useState(0);
 
   // Sync with backend duration when it changes (handles refresh/navigation)
   useEffect(() => {
     if (activeDuration !== null) {
       // Round to nearest second to avoid decimal issues
-      setDisplaySeconds(Math.floor(activeDuration));
+      setDisplaySeconds(Math.floor(activeDuration || 0));
     }
   }, [activeDuration]);
 

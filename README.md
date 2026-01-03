@@ -93,89 +93,36 @@ Whether you're a defense consultant, enterprise executive, legal professional, o
 - **Multi-Platform:** Works on macOS, Windows, and Linux.
 - **Open Source:** Meetily is open source and free to use.
 
-## Installation
-
-### 🪟 **Windows**
-
-1. Download the latest `x64-setup.exe` from [Releases](https://github.com/Zackriya-Solutions/meeting-minutes/releases/latest)
-2. Right-click the downloaded file → **Properties** → Check **Unblock** → Click **OK**
-3. Run the installer (if Windows shows a security warning: Click **More info** → **Run anyway**)
-
-### 🍎 **macOS**
-
-### 🍎 **macOS** (M Series chips)
-
-1. [meetily_0.1.1_aarch64.dmg](https://github.com/Zackriya-Solutions/meeting-minutes/releases/download/0.1.1/meetily_0.1.1_aarch64.dmg)
-2. Install the .dmg
-3. Then open **meetily.app** from Applications folder.
-
-> **⚠️ Data Migration:** The application will ask whether to import your old database through a popup window on first launch.
-
-### 🐧 **Linux**
-
-Build from source following our detailed guides:
-
-- [Building on Linux](docs/building_in_linux.md)
-- [General Build Instructions](docs/BUILDING.md)
-
-**Quick start:**
-
-```bash
-git clone https://github.com/Zackriya-Solutions/meeting-minutes
-cd meeting-minutes/frontend
-pnpm install
-pnpm run tauri:build
-```
-
-## Key Features in Action
-
-### 🎯 Local Transcription
-
-Transcribe meetings entirely on your device using **Whisper** or **Parakeet** models. No cloud required.
-<p align="center">
-    <img src="docs/home.png" width="650" style="border-radius: 10px;" alt="Meetily Demo" />
-</p>
-
-### 🤖 AI-Powered Summaries
-
-Generate meeting summaries with your choice of AI provider. **Ollama** (local) is recommended, with support for Claude, Groq, OpenRouter, and OpenAI.
-
-<p align="center">
-    <img src="docs/summary.png" width="650" style="border-radius: 10px;" alt="Summary generation" />
-</p>
-
-<p align="center">
-    <img src="docs/editor1.png" width="650" style="border-radius: 10px;" alt="Editor Summary generation" />
-</p>
-
-### 🔒 Privacy-First Design
-
-All data stays on your machine. Transcription models, recordings, and transcripts are stored locally.
-
-<p align="center">
-    <img src="docs/settings.png" width="650" style="border-radius: 10px;" alt="Local Transcription and storage" />
-</p>
-
-### 🎙️ Professional Audio Mixing
-
-Capture microphone and system audio simultaneously with intelligent ducking and clipping prevention.
-
-<p align="center">
-    <img src="docs/audio.png" width="650" style="border-radius: 10px;" alt="Device selection" />
-</p>
-
-### ⚡ GPU Acceleration
-
-Built-in support for hardware acceleration across platforms:
-
-- **macOS**: Apple Silicon (Metal) + CoreML
-- **Windows/Linux**: NVIDIA (CUDA), AMD/Intel (Vulkan)
-
-Automatically enabled at build time - no configuration needed.
-
 ## System Architecture
 
-Meetily is a single, self-contained application built with [Tauri](https://tauri.app/). It uses a Rust-based backend to handle all the core logic, and a Next.js frontend for the user interface.
+Meetily is a privacy-first web application.
+- **Frontend**: Next.js (React) application for the user interface.
+- **Backend**: Python FastAPI server handling audio processing, transcription (Whisper), and summarization (Ollama).
+- **Database**: SQLite (handled by Backend) or managed locally.
+
+## Installation
+
+### Running with Docker (Recommended)
+
+1. Ensure Docker is installed.
+2. Run the start script:
+   ```bash
+   ./run-docker.sh
+   ```
+   This will start both the frontend and backend services.
+   Access the app at `http://localhost:3118`.
+
+### Manual Installation
+
+#### Backend
+1. Navigate to `/backend`.
+2. Install Python dependencies: `pip install -r requirements.txt`.
+3. Run the server: `python app/main.py`.
+
+#### Frontend
+1. Navigate to `/frontend`.
+2. Install dependencies: `pnpm install`.
+3. Run the dev server: `pnpm run dev`.
 
 For more details, see the [Architecture documentation](docs/architecture.md).
 

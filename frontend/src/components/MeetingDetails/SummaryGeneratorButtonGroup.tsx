@@ -18,7 +18,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Sparkles, Settings, Loader2, FileText, Check } from 'lucide-react';
 import Analytics from '@/lib/analytics';
-import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { useState } from 'react';
 
@@ -29,7 +28,7 @@ interface SummaryGeneratorButtonGroupProps {
   onGenerateSummary: (customPrompt: string) => Promise<void>;
   customPrompt: string;
   summaryStatus: 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
-  availableTemplates: Array<{id: string, name: string, description: string}>;
+  availableTemplates: Array<{ id: string, name: string, description: string }>;
   selectedTemplate: string;
   onTemplateSelect: (templateId: string, templateName: string) => void;
   hasTranscripts?: boolean;
@@ -65,8 +64,14 @@ export function SummaryGeneratorButtonGroup({
 
     setIsCheckingModels(true);
     try {
-      const endpoint = modelConfig.ollamaEndpoint || null;
-      const models = await invoke('get_ollama_models', { endpoint }) as any[];
+      const endpoint = modelConfig.ollamaEndpoint || 'http://localhost:11434';
+
+      // Use direct fetch to Ollama
+      const response = await fetch(`${endpoint}/api/tags`);
+      if (!response.ok) throw new Error('Failed to reach Ollama');
+
+      const data = await response.json();
+      const models = data.models || [];
 
       if (!models || models.length === 0) {
         // No models available, show message and open settings
@@ -83,7 +88,7 @@ export function SummaryGeneratorButtonGroup({
     } catch (error) {
       console.error('Error checking Ollama models:', error);
       toast.error(
-        'Failed to check Ollama models. Please check if Ollama is running and download a model.',
+        'Failed to check Ollama models. Please check if Ollama is running.',
         { duration: 5000 }
       );
       setSettingsDialogOpen(true);
@@ -108,10 +113,10 @@ export function SummaryGeneratorButtonGroup({
           isModelConfigLoading
             ? 'Loading model configuration...'
             : summaryStatus === 'processing'
-            ? 'Generating summary...'
-            : isCheckingModels
-            ? 'Checking models...'
-            : 'Generate AI Summary'
+              ? 'Generating summary...'
+              : isCheckingModels
+                ? 'Checking models...'
+                : 'Generate AI Summary'
         }
       >
         {summaryStatus === 'processing' || isCheckingModels || isModelConfigLoading ? (
@@ -126,7 +131,7 @@ export function SummaryGeneratorButtonGroup({
           </>
         )}
       </Button>
-      
+
       {/* Settings button */}
       <Dialog open={settingsDialogOpen} onOpenChange={setSettingsDialogOpen}>
         <DialogTrigger asChild>
@@ -157,7 +162,7 @@ export function SummaryGeneratorButtonGroup({
         </DialogContent>
       </Dialog>
 
-      
+
 
       {/* Template selector dropdown */}
       {availableTemplates.length > 0 && (

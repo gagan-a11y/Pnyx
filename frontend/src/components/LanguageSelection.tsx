@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Globe } from 'lucide-react';
 import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
@@ -138,14 +137,14 @@ export function LanguageSelection({
   const handleLanguageChange = async (languageCode: string) => {
     setSaving(true);
     try {
-      // Save language preference to backend
-      await invoke('set_language_preference', { language: languageCode });
+      // Save language preference to localStorage
+      localStorage.setItem('language_preference', languageCode);
       onLanguageChange(languageCode);
       console.log('Language preference saved:', languageCode);
 
       // Track language selection analytics
       const selectedLang = LANGUAGES.find(lang => lang.code === languageCode);
-      await Analytics.track('language_selected', {
+      Analytics.track('language_selected', {
         language_code: languageCode,
         language_name: selectedLang?.name || 'Unknown',
         is_auto_detect: (languageCode === 'auto').toString(),
@@ -159,9 +158,7 @@ export function LanguageSelection({
       });
     } catch (error) {
       console.error('Failed to save language preference:', error);
-      toast.error("Failed to save language preference", {
-        description: error instanceof Error ? error.message : String(error)
-      });
+      toast.error("Failed to save language preference");
     } finally {
       setSaving(false);
     }

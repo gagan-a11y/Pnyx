@@ -350,78 +350,151 @@ Answer ONLY "YES" or "NO".
 
     async def search_web(self, query: str) -> str:
         """
-        AI-powered web search using Gemini with grounding.
-        Returns a summarized answer with citations like Perplexity.
+        Real web search using SerpAPI (Google) + crawling + Gemini summarization.
+        1. Search Google via SerpAPI for URLs
+        2. Crawl and extract content from pages
+        3. Use Gemini to synthesize and summarize with citations
         """
-        logger.info(f"AI Web search for: {query}")
+        logger.info(f"Real web search for: {query}")
         try:
+            import httpx
+            import trafilatura
             import google.generativeai as genai
+            import asyncio
+            import os
             
-            # Get Gemini API key
+            # Step 1: Search Google via SerpAPI
+            SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+            
+            async def serpapi_search():
+                try:
+                    from serpapi import GoogleSearch
+                    
+                    params = {
+                        "q": query,
+                        "api_key": SERPAPI_KEY,
+                        "num": 5,
+                        "hl": "en",  # English language
+                        "gl": "us",  # US region
+                    }
+                    
+                    # Run in thread pool since SerpAPI is sync
+                    def do_search():
+                        search = GoogleSearch(params)
+                        results = search.get_dict()
+                        return results.get("organic_results", [])
+                    
+                    loop = asyncio.get_event_loop()
+                    return await loop.run_in_executor(None, do_search)
+                except Exception as e:
+                    logger.error(f"SerpAPI search failed: {e}")
+                    return []
+            
+            search_results = await serpapi_search()
+            
+            if not search_results:
+                return f"No search results found for '{query}'."
+            
+            logger.info(f"SerpAPI found {len(search_results)} results")
+            
+            # Step 2: Crawl pages and extract content
+            async def fetch_and_extract(url: str) -> dict:
+                try:
+                    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                        response = await client.get(url, headers={
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                        })
+                        if response.status_code == 200:
+                            html = response.text
+                            # Extract main content using trafilatura
+                            text = trafilatura.extract(html, include_comments=False, include_tables=True)
+                            if text and len(text) > 100:
+                                return {'url': url, 'content': text[:2000], 'success': True}
+                except Exception as e:
+                    logger.warning(f"Failed to crawl {url}: {e}")
+                return {'url': url, 'content': '', 'success': False}
+            
+            # Crawl pages in parallel - SerpAPI uses 'link' instead of 'href'
+            crawl_tasks = [fetch_and_extract(r.get('link', '')) for r in search_results[:4]]
+            crawled = await asyncio.gather(*crawl_tasks)
+            
+            # Collect successful extractions
+            sources = []
+            for i, result in enumerate(crawled):
+                if result['success'] and result['content']:
+                    title = search_results[i].get('title', 'Unknown')
+                    sources.append({
+                        'title': title,
+                        'url': result['url'],
+                        'content': result['content']
+                    })
+            
+            if not sources:
+                # Fallback: use SerpAPI snippets
+                sources = [{
+                    'title': r.get('title', 'Unknown'),
+                    'url': r.get('link', ''),
+                    'content': r.get('snippet', '')
+                } for r in search_results[:3]]
+            
+            logger.info(f"Extracted content from {len(sources)} sources")
+            
+            # Step 3: Use Gemini to synthesize
             api_key = await db.get_api_key("gemini")
             if not api_key:
                 import os
                 api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
             
             if not api_key:
-                return "❌ Gemini API key not configured. Please set GOOGLE_API_KEY or GEMINI_API_KEY."
+                return "❌ Gemini API key not configured."
             
             genai.configure(api_key=api_key)
-            
-            # Use Gemini with Google Search grounding
             model = genai.GenerativeModel('gemini-2.0-flash')
             
-            # Create a prompt that instructs Gemini to search and summarize
-            search_prompt = f"""You are a research assistant. Search for information about the following query and provide a comprehensive, well-researched answer.
+            # Format sources for context
+            sources_text = ""
+            for i, src in enumerate(sources, 1):
+                sources_text += f"\n[Source {i}: {src['title']}]\nURL: {src['url']}\nContent:\n{src['content']}\n---\n"
+            
+            prompt = f"""You are a research assistant. Based on the following web sources, provide a comprehensive answer to the query.
 
 Query: {query}
 
+Web Sources:
+{sources_text}
+
 Instructions:
-1. Search for the most relevant and up-to-date information
-2. Synthesize information from multiple reliable sources
-3. Provide specific data, benchmarks, comparisons where available
-4. Include citations with source names
-5. Be factual and objective
-6. Format your response clearly with sections if needed
+1. Synthesize information from the sources provided
+2. Cite sources inline using [Source N] format
+3. Be factual - only use information from the sources
+4. Provide specific data, numbers, and comparisons where available
+5. Format with clear headings and bullet points
 
-Provide your answer in this format:
-- Start with a brief summary
-- Include detailed findings with specific data/numbers
-- End with sources/references
+End with a "Sources" section listing all referenced URLs."""
 
-Remember to cite your sources inline like [Source Name] and list them at the end."""
-
-            # Generate response with grounding
-            try:
-                from google.generativeai.types import HarmCategory, HarmBlockThreshold
-                
-                response = await model.generate_content_async(
-                    search_prompt,
-                    generation_config=genai.GenerationConfig(
-                        temperature=0.7,
-                        top_p=0.9,
-                        max_output_tokens=2048,
-                    ),
-                    safety_settings={
-                        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-                    }
-                )
-                
-                if response and response.text:
-                    return f"**🔍 AI Research Results:**\n\n{response.text}"
-                else:
-                    return "No results found for this query."
-                    
-            except Exception as gen_error:
-                logger.error(f"Gemini generation failed: {gen_error}")
-                # Fallback to basic response
-                return f"Search failed: {str(gen_error)}"
+            from google.generativeai.types import HarmCategory, HarmBlockThreshold
+            
+            response = await model.generate_content_async(
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    temperature=0.3,  # Lower for more factual
+                    max_output_tokens=2048,
+                ),
+                safety_settings={
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                }
+            )
+            
+            if response and response.text:
+                return f"**🔍 Web Research Results:**\n\n{response.text}"
+            else:
+                return "Failed to generate summary from sources."
                     
         except Exception as e:
-            logger.error(f"AI Web search failed: {e}")
+            logger.error(f"Real web search failed: {e}", exc_info=True)
             return f"Web search failed: {str(e)}"
 
     async def _needs_web_search(self, question: str, context_snippet: str) -> bool:

@@ -292,61 +292,33 @@ class TranscriptProcessor:
 
     async def _needs_linked_context(self, question: str, current_context_snippet: str) -> bool:
         """
-        Use 8b-instant model to quickly determine if the question needs linked meeting context.
-        This saves tokens by avoiding unnecessary cross-meeting searches.
+        Determine if the question needs linked meeting context using keyword detection.
         
-        Returns True if the question likely needs information from other meetings.
+        Since this is an internal product, users are instructed to use specific keywords
+        when they want to search in linked meetings (similar to web search triggers).
+        
+        Returns True if the question contains linked meeting keywords.
         """
-        # Fast heuristic checks first (no API call needed)
         question_lower = question.lower()
         
-        # Keywords that suggest cross-meeting context is needed
+        # Keywords that trigger linked meeting search
+        # Users should use these keywords to explicitly request cross-meeting context
         cross_meeting_keywords = [
+            "search in linked meetings", "linked meetings", "search linked",
             "previous meeting", "last meeting", "other meeting", "earlier meeting",
-            "compare", "comparison", "different from", "changed since", "before",
+            "compare", "comparison", "different from", "changed since",
             "history", "past", "previously discussed", "follow up", "follow-up",
             "what did we say", "what was said", "mentioned before", "discussed earlier"
         ]
         
         for keyword in cross_meeting_keywords:
             if keyword in question_lower:
-                logger.info(f"Classifier: keyword '{keyword}' detected, will fetch linked context")
+                logger.info(f"Linked context: keyword '{keyword}' detected, will fetch linked meeting context")
                 return True
         
-        # If no obvious keywords, use Gemini for quick classification
-        try:
-            api_key = await db.get_api_key("gemini")
-            if not api_key:
-                api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                # Default to True if we can't classify (safer to include context)
-                return True
-
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-2.0-flash')
-
-            classifier_prompt = f"""You are a classifier. Given a question about a meeting, determine if the answer REQUIRES information from OTHER/PREVIOUS meetings.
-
-Question: "{question}"
-
-Current meeting snippet: "{current_context_snippet[:500]}"
-
-Answer ONLY "YES" or "NO".
-- "YES" if the question asks about comparisons, history, previous discussions, or references other meetings
-- "NO" if the question can be answered using only the current meeting context"""
-
-            response = model.generate_content(classifier_prompt)
-            
-            answer = response.text.strip().upper()
-            needs_context = "YES" in answer
-            logger.info(f"Classifier response: '{answer}' -> needs_linked_context={needs_context}")
-            return needs_context
-            
-        except Exception as e:
-            logger.warning(f"Classifier failed, defaulting to False: {e}")
-            # Default to False (don't fetch) to save tokens
-            return False
+        # No keyword match - don't fetch linked context
+        logger.info("Linked context: no trigger keyword detected, skipping linked meeting search")
+        return False
 
     async def search_web(self, query: str) -> str:
         """
@@ -566,80 +538,119 @@ Answer ONLY "SEARCH" or "MEETING":
                 
                 return web_search_response()
         
-        # === SMART CONTEXT GATING ===
-        # Only fetch linked meeting context if:
-        # 1. User has explicitly linked meetings (allowed_meeting_ids provided)
-        # 2. The classifier determines the question needs cross-meeting context
+        # === AUTO-DETECT GLOBAL MEETING SEARCH REQUESTS ===
+        global_search_triggers = [
+            "search all meetings", "search in all meetings", "search globally",
+            "global search", "find in all meetings", "search across meetings",
+            "search in meetings", "search meetings"
+        ]
+        
+        allow_global_search = False
+        for trigger in global_search_triggers:
+            if trigger in question_lower:
+                logger.info(f"Auto-detected global meeting search trigger: '{trigger}'")
+                allow_global_search = True
+                break
+        
+        # === CONTEXT STRATEGY ===
+        # 1. Current meeting: Full transcript (no limit - Gemini can handle it)
+        # 2. Linked meetings: Full transcripts from DB when user asks (keyword trigger)
+        # 3. Global search: Vector search with 20 chunks when explicitly triggered
         
         cross_meeting_context = ""
         
-        # Only process linked meetings if user explicitly linked them
-        if allowed_meeting_ids and len(allowed_meeting_ids) > 0:
-            # Use fast 8b model to classify if we need linked context
+        # === GLOBAL SEARCH (Vector search across ALL meetings) ===
+        if allow_global_search:
+            try:
+                from vector_store import search_context, get_collection_stats
+                stats = get_collection_stats()
+                if stats.get("status") == "available":
+                    # 20 chunks for global search across all meetings
+                    results = await search_context(
+                        query=question, 
+                        n_results=20,
+                        allowed_meeting_ids=None  # Search all meetings
+                    )
+                    logger.info(f"Global meeting search: {len(results) if results else 0} chunks found")
+                    if results:
+                        cross_meeting_context = "\n\nRelevant Context from All Meetings (Global Search):\n"
+                        for r in results:
+                            source = f"{r.get('meeting_title', 'Unknown')} ({r.get('meeting_date', 'Unknown')})"
+                            text = r.get('text', '').strip()
+                            cross_meeting_context += f"- [{source}]: {text}\n"
+            except Exception as e:
+                logger.warning(f"Failed to perform global meeting search: {e}")
+        
+        # === LINKED MEETINGS (Full transcripts from DB when user asks) ===
+        elif allowed_meeting_ids and len(allowed_meeting_ids) > 0:
+            # Check if user is asking about linked meetings
             needs_linked = await self._needs_linked_context(question, context[:1000] if context else "")
             
             if needs_linked:
+                logger.info(f"Fetching full transcripts for {len(allowed_meeting_ids)} linked meetings")
                 try:
-                    from vector_store import search_context, get_collection_stats
-                    stats = get_collection_stats()
-                    if stats.get("status") == "available":
-                        # Only 5 chunks from linked meetings (reduced from 50)
-                        results = await search_context(
-                            query=question, 
-                            n_results=5,
-                            allowed_meeting_ids=allowed_meeting_ids  # Only linked meetings, no global
-                        )
-                        logger.info(f"Linked meeting search: {len(results) if results else 0} chunks found")
-                        if results:
-                            cross_meeting_context = "\n\nRelevant Context from Linked Meetings:\n"
-                            for r in results:
-                                source = f"{r.get('meeting_title', 'Unknown')} ({r.get('meeting_date', 'Unknown')})"
-                                # Limit each chunk to 300 chars
-                                text = r.get('text', '').strip()[:300]
-                                cross_meeting_context += f"- [{source}]: {text}\n"
+                    cross_meeting_context = "\n\nFULL TRANSCRIPTS FROM LINKED MEETINGS:\n"
+                    for meeting_id in allowed_meeting_ids:
+                        meeting_data = await self.db.get_meeting(meeting_id)
+                        if meeting_data:
+                            meeting_title = meeting_data.get('title', 'Unknown Meeting')
+                            meeting_date = meeting_data.get('created_at', 'Unknown Date')
+                            transcripts = meeting_data.get('transcripts', [])
+                            
+                            # Concatenate all transcripts for this meeting
+                            full_transcript = "\n".join([t.get('text', '') for t in transcripts])
+                            
+                            if full_transcript.strip():
+                                cross_meeting_context += f"\n=== [{meeting_title}] ({meeting_date}) ===\n"
+                                cross_meeting_context += full_transcript + "\n"
+                                logger.info(f"Added linked meeting '{meeting_title}': {len(full_transcript)} chars")
+                            else:
+                                logger.info(f"Linked meeting '{meeting_title}' has no transcripts")
                 except Exception as e:
-                    logger.warning(f"Failed to fetch linked meeting context: {e}")
+                    logger.warning(f"Failed to fetch linked meeting transcripts: {e}")
             else:
-                logger.info("Classifier determined linked context not needed for this question")
+                logger.info("Keyword check: no linked meeting trigger detected, skipping linked meeting fetch")
 
-        # Format history - limit to 5 messages for token savings
+        # Format history - keep first 2 + last 8 messages for context continuity
         history_text = ""
-        if history:
+        if history and len(history) > 0:
             history_text = "\nConversation History:\n"
-            for msg in history[-5:]:  # Reduced from 10 to 5
+            
+            if len(history) <= 10:
+                # If 10 or fewer, use all
+                selected_history = history
+            else:
+                # First 2 (for initial context) + Last 8 (for recent context)
+                selected_history = history[:2] + history[-8:]
+            
+            for msg in selected_history:
                 role = msg.get("role", "user")
-                content = msg.get("content", "")[:300]  # Limit each message
+                content = msg.get("content", "")[:1000]  # Allow up to 1000 chars per message
                 history_text += f"{role.upper()}: {content}\n"
 
-        # === CONTEXT TRUNCATION - 5K LIMIT ===
-        # Reduced from 20k to 5k chars (~1250 tokens)
-        if context and len(context) > 5000:
-            logger.info(f"Truncating context from {len(context)} to 5000 chars")
-            context = context[-5000:]  # Take most recent content
-        
-        # Limit cross-meeting context to 1500 chars (3-5 chunks @ 300 chars each)
-        if cross_meeting_context and len(cross_meeting_context) > 1500:
-            cross_meeting_context = cross_meeting_context[:1500]
+        # === NO CONTEXT LIMITS ===
+        # Gemini 2.0 Flash has 1M token context window
+        # Even 6 x 3-hour meetings = ~216K tokens (22% of limit)
+        # No truncation needed - pass full context for maximum accuracy
 
-        system_prompt = f"""
-        You are a helpful AI assistant answering questions about meetings.
-        
-        Current Meeting Context:
-        ---
-        {context}
-        ---
+        system_prompt = f"""You are a helpful meeting assistant. Use the provided context to answer questions accurately.
 
-        {cross_meeting_context}
+RULES:
+1. Answer based on the meeting context provided below - use ALL relevant information from both current and linked meetings
+2. When summarizing, include key points, decisions, action items, and important details from the context
+3. If citing information from linked meetings, use the source format shown in brackets (e.g., [Meeting Name (Date)])
+4. Do NOT invent information that isn't in the context - if something isn't mentioned, say so
+5. Be helpful and thorough in your responses
 
-        {history_text}
+CURRENT MEETING CONTEXT:
+---
+{context}
+---
+{cross_meeting_context}
+{history_text}
 
-        Instructions:
-        1. Answer the user's question based on the provided context (Current or Linked Meetings).
-        2. If using info from 'Linked Meetings', YOU MUST CITE THE SOURCE exactly as shown in brackets.
-        3. If history is provided, use it to understand conversation context.
-        4. If the answer is NOT in any context, say you don't have that information in the meeting context.
-        5. Be concise and direct.
-        """
+USER QUESTION: {question}
+"""
 
         try:
             # --- OLLAMA SUPPORT ---
@@ -776,12 +787,18 @@ Answer ONLY "SEARCH" or "MEETING":
                 
                 # Send message and get stream
                 response = chat_session.send_message(question, stream=True)
+                logger.info(f"Gemini chat session started, beginning stream...")
                 
                 async def stream_gemini(response_iterator):
                     try:
+                        chunk_count = 0
                         for chunk in response_iterator:
                             if hasattr(chunk, 'text') and chunk.text:
+                                chunk_count += 1
+                                if chunk_count == 1:
+                                    logger.info(f"Gemini streaming: first chunk received")
                                 yield chunk.text
+                        logger.info(f"Gemini streaming completed: {chunk_count} chunks yielded")
                     except Exception as e:
                         logger.error(f"Gemini streaming error: {e}", exc_info=True)
                         yield f"\n\nError during Gemini response: {str(e)}"

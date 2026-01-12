@@ -1007,7 +1007,17 @@ Use this context to better understand the meeting participants, purpose, and imp
 Template Instructions:
 {template_instructions}
 
-{context_section}IMPORTANT: Generate the notes in Markdown format with the following structure:
+{context_section}IMPORTANT GUIDELINES:
+
+Generate the notes in Markdown format with the following structure:
+
+**Spelling & Transcription Errors:**
+- The transcript is from speech-to-text and WILL contain spelling mistakes, misheard words, and phonetic errors
+- Use the context of the discussion to infer correct spellings (e.g., "react native" not "react naitive", "API" not "a p i")
+- Technical terms, product names, people's names, and acronyms are commonly misspelled - correct them based on context
+- If unsure about a spelling, use the most likely correct version based on the meeting context
+
+**Formatting:**
 - Use proper headings (## for main sections, ### for subsections)
 - Use bullet points for lists
 - Use bold for important items (like action items, decisions)
@@ -1021,7 +1031,15 @@ Transcript:
 {transcript_text}
 ---
 
-Generate comprehensive meeting notes now in Markdown format:"""
+Generate comprehensive meeting notes in Markdown format. At the END of the notes, add a section:
+
+## 📝 Transcription Corrections
+List any significant spelling/word corrections you made from the original transcript. Format as:
+- "original word/phrase" → "corrected word/phrase" (reason if not obvious)
+
+Only include corrections that meaningfully affect understanding (skip minor typos). If no significant corrections were needed, write "No significant corrections needed."
+
+Now generate the meeting notes:"""
         
         # Generate notes with Gemini
         response = await model.generate_content_async(prompt)

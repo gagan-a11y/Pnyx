@@ -1023,6 +1023,7 @@ Generate the notes in Markdown format with the following structure:
 - Use bold for important items (like action items, decisions)
 - Include participants if mentioned
 - Be concise but comprehensive
+- NEVER use code blocks (``` or ```) in the output - use plain text or bullet points instead
 
 Meeting Title: {meeting_title}
 

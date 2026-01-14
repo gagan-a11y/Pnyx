@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { toast } from 'sonner';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
+import { apiUrl } from '@/lib/config';
 
 interface UseMeetingOperationsProps {
   meeting: any;
@@ -10,7 +11,7 @@ export function useMeetingOperations({
   meeting,
 }: UseMeetingOperationsProps) {
   const { serverAddress } = useSidebar();
-  const baseUrl = serverAddress || 'http://localhost:5167';
+  const baseUrl = serverAddress || apiUrl;
 
   // Open meeting folder in file explorer
   const handleOpenMeetingFolder = useCallback(async () => {

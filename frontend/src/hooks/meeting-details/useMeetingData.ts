@@ -3,6 +3,7 @@ import { Transcript, Summary } from '@/types';
 import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
 import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { toast } from 'sonner';
+import { apiUrl } from '@/lib/config';
 
 interface UseMeetingDataProps {
   meeting: any;
@@ -39,7 +40,7 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
 
   const handleSaveMeetingTitle = useCallback(async () => {
     try {
-      await fetch(`${serverAddress || 'http://localhost:5167'}/save-meeting-title`, {
+      await fetch(`${serverAddress || apiUrl}/save-meeting-title`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -96,7 +97,7 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
         };
       }
 
-      await fetch(`${serverAddress || 'http://localhost:5167'}/save-summary`, {
+      await fetch(`${serverAddress || apiUrl}/save-summary`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -3,7 +3,7 @@ import { Transcript, Summary } from '@/types';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { toast } from 'sonner';
-
+import { apiUrl } from '@/lib/config';
 import Analytics from '@/lib/analytics';
 
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
@@ -66,7 +66,7 @@ export function useSummaryGeneration({
       setSummaryStatus(isRegeneration ? 'regenerating' : 'processing');
       setSummaryError(null);
 
-      const serverAddress = 'http://localhost:5167';
+      const serverAddress = apiUrl;
 
       try {
         if (!transcriptText.trim()) {

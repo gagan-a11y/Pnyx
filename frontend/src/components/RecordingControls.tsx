@@ -6,6 +6,7 @@ import { SummaryResponse } from '@/types/summary';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import Analytics from '@/lib/analytics';
+import { wsUrl } from '@/lib/config';
 import { AudioStreamClient } from '@/lib/audio-streaming/AudioStreamClient';
 
 interface RecordingControlsProps {
@@ -66,7 +67,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
 
     try {
       // Create new streaming audio client (uses Groq Whisper)
-      const client = new AudioStreamClient('ws://localhost:5167/ws/streaming-audio');
+      const client = new AudioStreamClient(wsUrl);
       audioClientRef.current = client;
 
       await client.start({

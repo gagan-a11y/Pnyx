@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Analytics from '@/lib/analytics';
+import { apiUrl } from '@/lib/config';
 
 interface SidebarItem {
   id: string;
@@ -112,7 +113,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const fetchSettings = async () => {
-      setServerAddress('http://localhost:5167');
+      setServerAddress(apiUrl);
       setTranscriptServerAddress('http://127.0.0.1:8178/stream');
     };
     fetchSettings();

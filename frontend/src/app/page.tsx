@@ -25,6 +25,7 @@ import { ChatInterface } from '@/components/MeetingDetails/ChatInterface';
 import { MicrophoneIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { ButtonGroup } from '@/components/ui/button-group';
+import { apiUrl } from '@/lib/config';
 
 
 
@@ -433,7 +434,7 @@ export default function Home() {
       const defaultTemplate = localStorage.getItem('selectedTemplate') || 'standard_meeting';
 
       // Call backend API directly - backend will automatically generate notes based on template
-      const response = await fetch('http://localhost:5167/save-transcript', {
+      const response = await fetch(`${apiUrl}/save-transcript`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

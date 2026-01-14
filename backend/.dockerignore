@@ -1,0 +1,56 @@
+# ===========================================
+# Docker Build Context Exclusions
+# ===========================================
+# These files are not needed in the Docker image
+# and excluding them speeds up builds
+
+# Windows-only scripts
+*.ps1
+*.cmd
+*.bat
+
+# Documentation (remove manually if needed)
+*.md
+docs/
+
+# Development files
+examples/
+debug_*.py
+temp.env
+
+# Local Whisper models (using Groq API in production)
+models/
+whisper-custom/
+whisper.cpp/
+
+# Local data (mounted as volume in production)
+data/
+
+# Git
+.git/
+.gitignore
+.gitmodules
+
+# Environment files (secrets passed via env vars)
+.env
+.env.*
+
+# Docker files (not needed inside container)
+docker-compose*.yml
+Dockerfile.*
+.docker-preferences
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Config directory (if not needed)
+config/

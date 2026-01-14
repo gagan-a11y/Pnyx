@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
+import { apiUrl } from '@/lib/config';
 
 interface UseModelConfigurationProps {
   serverAddress: string | null;
@@ -23,7 +24,7 @@ export function useModelConfiguration({ serverAddress }: UseModelConfigurationPr
       setIsLoading(true);
       try {
         console.log('🔄 Fetching model configuration from database via HTTP...');
-        const response = await fetch(`${serverAddress || 'http://localhost:5167'}/get-model-config`);
+        const response = await fetch(`${serverAddress || apiUrl}/get-model-config`);
         
         if (response.ok) {
            const data = await response.json();
@@ -82,7 +83,7 @@ export function useModelConfiguration({ serverAddress }: UseModelConfigurationPr
         );
       }
 
-      await fetch(`${serverAddress || 'http://localhost:5167'}/save-model-config`, {
+      await fetch(`${serverAddress || apiUrl}/save-model-config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)

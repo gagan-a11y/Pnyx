@@ -17,6 +17,8 @@ export interface StreamingCallbacks {
   onDisconnected?: () => void;
 }
 
+import { wsUrl } from '../config';
+
 export class AudioStreamClient {
   private audioContext: AudioContext | null = null;
   private audioWorklet: AudioWorkletNode | null = null;
@@ -33,7 +35,7 @@ export class AudioStreamClient {
   private sessionId: string | null = null;
 
   constructor(
-    private wsUrl: string = 'ws://localhost:5167/ws/streaming-audio'
+    private wsUrlOverride: string = wsUrl
   ) {}
 
   /**
@@ -141,8 +143,8 @@ export class AudioStreamClient {
     return new Promise((resolve, reject) => {
       // Append session_id if we have one (for resuming)
       const url = this.sessionId 
-        ? `${this.wsUrl}?session_id=${this.sessionId}`
-        : this.wsUrl;
+        ? `${this.wsUrlOverride}?session_id=${this.sessionId}`
+        : this.wsUrlOverride;
         
       this.websocket = new WebSocket(url);
       this.websocket.binaryType = 'arraybuffer';

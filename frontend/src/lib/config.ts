@@ -5,7 +5,7 @@
  * based on NODE_ENV environment variable.
  * 
  * Development (npm run dev): Uses localhost
- * Production (npm run build / Vercel): Uses env vars
+ * Production (npm run build / Vercel): Uses env vars or meet.digest.lat
  */
 
 const isDevelopment = process.env.NODE_ENV === 'development';
@@ -14,12 +14,12 @@ export const config = {
   // HTTP API base URL
   apiUrl: isDevelopment 
     ? 'http://localhost:5167'
-    : (process.env.NEXT_PUBLIC_BACKEND_URL || 'https://inflexibly-quakier-natashia.ngrok-free.dev'),
+    : (process.env.NEXT_PUBLIC_BACKEND_URL || 'https://meet.digest.lat'),
   
   // WebSocket URL for real-time streaming
   wsUrl: isDevelopment
     ? 'ws://localhost:5167/ws/streaming-audio'
-    : (process.env.NEXT_PUBLIC_WS_URL || 'wss://inflexibly-quakier-natashia.ngrok-free.dev/ws/streaming-audio'),
+    : (process.env.NEXT_PUBLIC_WS_URL || 'wss://meet.digest.lat/ws/streaming-audio'),
   
   // Debug mode - enables extra logging
   debug: isDevelopment,
@@ -27,20 +27,6 @@ export const config = {
   // Environment name for logging
   environment: isDevelopment ? 'development' : 'production',
 };
-
-// Headers to skip ngrok browser warning (required for free tier)
-export const ngrokHeaders = {
-  'ngrok-skip-browser-warning': 'true',
-};
-
-// Helper function for fetch with ngrok headers
-export async function fetchWithHeaders(url: string, options: RequestInit = {}): Promise<Response> {
-  const headers = {
-    ...ngrokHeaders,
-    ...options.headers,
-  };
-  return fetch(url, { ...options, headers });
-}
 
 // Log configuration on startup (client-side only)
 if (typeof window !== 'undefined' && config.debug) {

@@ -264,7 +264,7 @@ async def save_meeting_title(data: MeetingTitleUpdate, current_user: User = Depe
 async def delete_meeting(data: DeleteMeetingRequest, current_user: User = Depends(get_current_user)):
     """Delete a meeting and all its associated data"""
     # Note: Only OWNER (and maybe workspace admin) can delete.
-    # RBAC 'delete' action handles this logic.
+    # Security logic handles this check.
     if not await rbac.can(current_user, 'delete', data.meeting_id):
         raise HTTPException(status_code=403, detail="Permission denied to delete this meeting")
 

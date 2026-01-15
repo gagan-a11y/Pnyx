@@ -143,7 +143,7 @@ class DatabaseManager:
                 )
             """)
 
-            # --- RBAC Tables ---
+            # --- Security Tables ---
             
             # Create workspaces table
             cursor.execute("""
@@ -177,7 +177,7 @@ class DatabaseManager:
                 )
             """)
             
-            # Add new columns to meetings table for RBAC
+            # Add new columns to meetings table for ownership and privacy
             try:
                 cursor.execute("ALTER TABLE meetings ADD COLUMN workspace_id TEXT REFERENCES workspaces(id)")
                 logger.info("Added workspace_id column to meetings table")

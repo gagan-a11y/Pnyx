@@ -4,6 +4,7 @@ import { ModelConfig } from '@/components/ModelSettingsModal';
 import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { toast } from 'sonner';
 import { apiUrl } from '@/lib/config';
+import { authFetch } from '@/lib/api';
 import Analytics from '@/lib/analytics';
 
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
@@ -80,9 +81,9 @@ export function useSummaryGeneration({
         console.log('Generating notes with Gemini using template:', selectedTemplate);
 
         // Use the new /meetings/{id}/generate-notes endpoint which uses Gemini
-        const response = await fetch(`${serverAddress}/meetings/${meeting.id}/generate-notes`, {
+        const response = await authFetch(`/meetings/${meeting.id}/generate-notes`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          // headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             meeting_id: meeting.id,
             template_id: selectedTemplate,

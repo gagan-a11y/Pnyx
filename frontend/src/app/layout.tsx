@@ -6,6 +6,7 @@ import Sidebar from '@/components/Sidebar'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
 import AnalyticsProvider from '@/components/AnalyticsProvider'
+import { AuthProvider } from '@/components/AuthProvider'
 import { Toaster } from 'sonner'
 import "sonner/dist/styles.css"
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -28,21 +29,23 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${sourceSans3.variable} font-sans`}>
-        <AnalyticsProvider>
-          <RecordingStateProvider>
-            <SidebarProvider>
-              <OllamaDownloadProvider>
-                <TooltipProvider>
-                  {/* <div className="titlebar h-8 w-full fixed top-0 left-0 bg-transparent" /> */}
-                  <div className="flex">
-                    <Sidebar />
-                    <MainContent>{children}</MainContent>
-                  </div>
-                </TooltipProvider>
-              </OllamaDownloadProvider>
-            </SidebarProvider>
-          </RecordingStateProvider>
-        </AnalyticsProvider>
+        <AuthProvider>
+          <AnalyticsProvider>
+            <RecordingStateProvider>
+              <SidebarProvider>
+                <OllamaDownloadProvider>
+                  <TooltipProvider>
+                    {/* <div className="titlebar h-8 w-full fixed top-0 left-0 bg-transparent" /> */}
+                    <div className="flex">
+                      <Sidebar />
+                      <MainContent>{children}</MainContent>
+                    </div>
+                  </TooltipProvider>
+                </OllamaDownloadProvider>
+              </SidebarProvider>
+            </RecordingStateProvider>
+          </AnalyticsProvider>
+        </AuthProvider>
         <Toaster position="bottom-center" richColors closeButton />
       </body>
     </html>

@@ -26,6 +26,7 @@ import { MicrophoneIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { apiUrl } from '@/lib/config';
+import { authFetch } from '@/lib/api';
 
 
 
@@ -434,11 +435,10 @@ export default function Home() {
       const defaultTemplate = localStorage.getItem('selectedTemplate') || 'standard_meeting';
 
       // Call backend API directly - backend will automatically generate notes based on template
-      const response = await fetch(`${apiUrl}/save-transcript`, {
+      // Call backend API directly - backend will automatically generate notes based on template
+      const response = await authFetch('/save-transcript', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        // headers: { 'Content-Type': 'application/json' }, // authFetch handles Content-Type
         body: JSON.stringify({
           meeting_title: meetingTitle || 'Web Audio Meeting',
           transcripts: freshTranscripts.map((t, index) => ({
@@ -571,11 +571,13 @@ export default function Home() {
 
       // Process transcript
       console.log('Processing transcript...');
-      const processResponse = await fetch(`${serverAddress}/process-transcript`, {
+
+      const processResponse = await authFetch('/process-transcript', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: fullTranscript,
+          meeting_id: currentMeeting?.id || 'new-meeting', // Ensure meeting_id is passed if available
           model: modelConfig.provider,
           modelName: modelConfig.model,
           chunkSize: 40000,
@@ -594,7 +596,8 @@ export default function Home() {
       // Poll for summary status
       const pollInterval = setInterval(async () => {
         try {
-          const summaryResponse = await fetch(`${serverAddress}/get-summary/${process_id}`);
+
+          const summaryResponse = await authFetch(`/get-summary/${process_id}`);
           const result = await summaryResponse.json();
           console.log('Summary status:', result);
 
@@ -762,11 +765,13 @@ export default function Home() {
 
       // Process transcript
       console.log('Processing transcript...');
-      const processResponse = await fetch(`${serverAddress}/process-transcript`, {
+
+      const processResponse = await authFetch('/process-transcript', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: originalTranscript,
+          meeting_id: currentMeeting?.id, // Important for RBAC
           model: modelConfig.provider,
           modelName: modelConfig.model,
           chunkSize: 40000,
@@ -783,7 +788,8 @@ export default function Home() {
       // Poll for summary status
       const pollInterval = setInterval(async () => {
         try {
-          const summaryResponse = await fetch(`${serverAddress}/get-summary/${process_id}`);
+
+          const summaryResponse = await authFetch(`/get-summary/${process_id}`);
           const result = await summaryResponse.json();
           console.log('Summary status:', result);
 

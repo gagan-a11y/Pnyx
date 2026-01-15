@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil } from 'lucide-react';
+import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, LogOut } from 'lucide-react';
+import { signOut } from 'next-auth/react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
 import type { CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
@@ -492,6 +493,20 @@ const Sidebar: React.FC = () => {
             </TooltipContent>
           </Tooltip>
 
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => signOut()}
+                className="p-2 rounded-lg transition-colors duration-150 hover:bg-red-50 group"
+              >
+                <LogOut className="w-5 h-5 text-gray-600 group-hover:text-red-500" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <p>Log Out</p>
+            </TooltipContent>
+          </Tooltip>
+
           <Info isCollapsed={isCollapsed} />
         </div>
       </TooltipProvider>
@@ -753,6 +768,13 @@ const Sidebar: React.FC = () => {
             >
               <Settings className="w-4 h-4 mr-2" />
               <span>Settings</span>
+            </button>
+            <button
+              onClick={() => signOut()}
+              className="w-full flex items-center justify-center px-3 py-1.5 mt-1 mb-1 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors shadow-sm"
+            >
+              <LogOut className="w-4 h-4 mr-2" />
+              <span>Log Out</span>
             </button>
             <Info isCollapsed={isCollapsed} />
             <div className="w-full flex items-center justify-center px-3 py-1 text-xs text-gray-400">

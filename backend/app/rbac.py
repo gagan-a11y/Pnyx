@@ -1,0 +1,119 @@
+from db import DatabaseManager
+from auth import User
+import logging
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+class RBAC:
+    def __init__(self, db: DatabaseManager):
+        self.db = db
+
+    async def can(self, user: User, action: str, meeting_id: str) -> bool:
+        """
+        Central Policy Check: Can `user` perform `action` on `meeting_id`?
+        
+        Actions: 'view', 'edit', 'delete', 'invite', 'ai_interact'
+        """
+        if not user or not user.email:
+            return False
+
+        # 1. Fetch meeting context (Owner, Workspace)
+        # We use a lightweight query instead of get_meeting to save bandwidth
+        async with self.db._get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT owner_id, workspace_id FROM meetings WHERE id = ?", 
+                (meeting_id,)
+            )
+            row = await cursor.fetchone()
+            
+            if not row:
+                logger.warning(f"RBAC: Meeting {meeting_id} not found")
+                return False
+                
+            owner_id, workspace_id = row
+            
+        # 2. Check Ownership (ALLOW ALL)
+        # Note: We compare EMAIL as ID for now since we don't have separate user IDs in auth.py yet
+        # Ensure owner_id is treated as email if that's how we store it.
+        # Current logic: owner_id IS the user's email/id.
+        if owner_id == user.email:
+            return True
+
+        # 3. Check Workspace Admin (ALLOW ALL)
+        if workspace_id:
+            async with self.db._get_connection() as conn:
+                cursor = await conn.execute(
+                    "SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?",
+                    (workspace_id, user.email)
+                )
+                member_row = await cursor.fetchone()
+                if member_row and member_row[0] == 'admin':
+                    return True
+
+        # 4. Check Explicit Permissions
+        async with self.db._get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT role FROM meeting_permissions WHERE meeting_id = ? AND user_id = ?",
+                (meeting_id, user.email)
+            )
+            perm_row = await cursor.fetchone()
+            
+        if not perm_row:
+            return False
+            
+        role = perm_row[0]
+        
+        # 5. Resolve based on Role & Action
+        # viewer: view
+        # participant: view, ai_interact, edit
+        
+        if role == 'viewer':
+            if action in ['view', 'export']:
+                return True
+            return False
+            
+        if role == 'participant':
+            if action in ['view', 'export', 'ai_interact', 'edit']:
+                return True
+            # Participants cannot delete or invite (unless logic changes)
+            return False
+
+        return False
+
+    async def get_accessible_meetings(self, user: User):
+        """
+        Return a list of meeting_ids the user can access.
+        Used for filtering /get-meetings.
+        """
+        # Complex query logic needed here or just filter in memory?
+        # SQL filtering is better.
+        
+        # Query:
+        # 1. Owned meetings
+        # 2. Workspace meetings where user is ADMIN
+        # 3. Workspace meetings where user is MEMBER (Wait, members don't see all. ONLY Explicit invites!)
+        #    Actually, Spec says: "workspace_member sees only meetings they’re invited to".
+        #    So Workspace Membership (Role=Member) gives NO default access.
+        #    Workspace Admin gives ALL access.
+        # 4. Explicitly invited meetings (Personal or Workspace) via meeting_permissions.
+        
+        query = """
+            SELECT m.id 
+            FROM meetings m
+            LEFT JOIN workspace_members wm ON m.workspace_id = wm.workspace_id AND wm.user_id = ?
+            LEFT JOIN meeting_permissions mp ON m.id = mp.meeting_id AND mp.user_id = ?
+            WHERE 
+                m.owner_id = ?                  -- 1. Owner
+                OR (wm.role = 'admin')          -- 2. Workspace Admin
+                OR (mp.role IS NOT NULL)        -- 3. Explicit Invite
+        """
+        # Note: If meeting has NO workspace_id (Personal), wm.role will be null.
+        
+        accessible_ids = []
+        async with self.db._get_connection() as conn:
+            cursor = await conn.execute(query, (user.email, user.email, user.email))
+            rows = await cursor.fetchall()
+            accessible_ids = [r[0] for r in rows]
+            
+        return accessible_ids

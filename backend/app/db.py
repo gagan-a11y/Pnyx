@@ -143,6 +143,54 @@ class DatabaseManager:
                 )
             """)
 
+            # --- RBAC Tables ---
+            
+            # Create workspaces table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS workspaces (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Create workspace_members table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS workspace_members (
+                    workspace_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
+                    PRIMARY KEY (workspace_id, user_id),
+                    FOREIGN KEY (workspace_id) REFERENCES workspaces(id)
+                )
+            """)
+
+            # Create meeting_permissions table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS meeting_permissions (
+                    meeting_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('participant', 'viewer')),
+                    PRIMARY KEY (meeting_id, user_id),
+                    FOREIGN KEY (meeting_id) REFERENCES meetings(id)
+                )
+            """)
+            
+            # Add new columns to meetings table for RBAC
+            try:
+                cursor.execute("ALTER TABLE meetings ADD COLUMN workspace_id TEXT REFERENCES workspaces(id)")
+                logger.info("Added workspace_id column to meetings table")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE meetings ADD COLUMN owner_id TEXT")
+                logger.info("Added owner_id column to meetings table")
+            except sqlite3.OperationalError:
+                pass
+
+
             # Dictionary of table name -> columns to check and add if missing
             # This serves as a simple migration system
             tables_to_check = {
@@ -381,7 +429,7 @@ class DatabaseManager:
                     return dict(zip([col[0] for col in cursor.description], row))
                 return None
 
-    async def save_meeting(self, meeting_id: str, title: str, folder_path: str = None):
+    async def save_meeting(self, meeting_id: str, title: str, folder_path: str = None, owner_id: str = None, workspace_id: str = None):
         """Save or update a meeting"""
         try:
             with sqlite3.connect(self.db_path) as conn:
@@ -392,12 +440,12 @@ class DatabaseManager:
                 existing_meeting = cursor.fetchone()
 
                 if not existing_meeting:
-                    # Create new meeting with local timestamp and folder path
+                    # Create new meeting
                     cursor.execute("""
-                        INSERT INTO meetings (id, title, created_at, updated_at, folder_path)
-                        VALUES (?, ?, datetime('now', 'localtime'), datetime('now', 'localtime'), ?)
-                    """, (meeting_id, title, folder_path))
-                    logger.info(f"Saved meeting {meeting_id} with folder_path: {folder_path}")
+                        INSERT INTO meetings (id, title, created_at, updated_at, folder_path, owner_id, workspace_id)
+                        VALUES (?, ?, datetime('now', 'localtime'), datetime('now', 'localtime'), ?, ?, ?)
+                    """, (meeting_id, title, folder_path, owner_id, workspace_id))
+                    logger.info(f"Saved meeting {meeting_id} (Owner: {owner_id}, WS: {workspace_id})")
                 else:
                     # If we get here and meeting exists, throw error since we don't want duplicates
                     raise Exception(f"Meeting with ID {meeting_id} already exists")
@@ -436,7 +484,7 @@ class DatabaseManager:
             async with self._get_connection() as conn:
                 # Get meeting details
                 cursor = await conn.execute("""
-                    SELECT id, title, created_at, updated_at
+                    SELECT id, title, created_at, updated_at, owner_id, workspace_id
                     FROM meetings
                     WHERE id = ?
                 """, (meeting_id,))
@@ -458,6 +506,8 @@ class DatabaseManager:
                     'title': meeting[1],
                     'created_at': meeting[2],
                     'updated_at': meeting[3],
+                    'owner_id': meeting[4],
+                    'workspace_id': meeting[5],
                     'transcripts': [{
                         'id': meeting_id,
                         'text': transcript[0],
@@ -487,7 +537,7 @@ class DatabaseManager:
         """Get all meetings with basic information"""
         async with self._get_connection() as conn:
             cursor = await conn.execute("""
-                SELECT id, title, created_at
+                SELECT id, title, created_at, owner_id, workspace_id
                 FROM meetings
                 ORDER BY created_at DESC
             """)
@@ -495,7 +545,9 @@ class DatabaseManager:
             return [{
                 'id': row[0],
                 'title': row[1],
-                'created_at': row[2]
+                'created_at': row[2],
+                'owner_id': row[3],
+                'workspace_id': row[4]
             } for row in rows]
 
     async def delete_meeting(self, meeting_id: str):

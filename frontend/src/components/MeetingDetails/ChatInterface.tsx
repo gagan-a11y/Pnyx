@@ -3,6 +3,7 @@ import { Send, Bot, User, Loader2, X, Link as LinkIcon, ChevronDown, ChevronUp, 
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { Transcript } from '@/types';
 import { MeetingSelector } from './MeetingSelector';
+import { authFetch } from '@/lib/api';
 
 interface Message {
     role: 'user' | 'assistant';
@@ -161,7 +162,7 @@ export function ChatInterface({ meetingId, onClose, currentTranscripts }: ChatIn
     useEffect(() => {
         const fetchConfig = async () => {
             try {
-                const res = await fetch(`${serverAddress}/get-model-config`);
+                const res = await authFetch('/get-model-config');
                 if (res.ok) {
                     const config = await res.json();
                     setModelConfig(config);
@@ -193,9 +194,9 @@ export function ChatInterface({ meetingId, onClose, currentTranscripts }: ChatIn
 
             const contextText = getContextFromTranscripts();
 
-            const response = await fetch(`${serverAddress}/chat-meeting`, {
+            const response = await authFetch('/chat-meeting', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                // headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     meeting_id: meetingId,
                     question: userMessage,

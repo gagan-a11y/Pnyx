@@ -6,6 +6,7 @@ import PageContent from "./page-content";
 import { useRouter, useSearchParams } from "next/navigation";
 import Analytics from "@/lib/analytics";
 import { LoaderIcon } from "lucide-react";
+import { authFetch } from "@/lib/api";
 
 interface MeetingDetailsResponse {
   id: string;
@@ -50,7 +51,7 @@ function MeetingDetailsContent() {
     try {
       if (!serverAddress) return;
       // ✅ STEP 1: Check what's currently in database
-      const configResponse = await fetch(`${serverAddress}/get-model-config`);
+      const configResponse = await authFetch('/get-model-config');
       const currentConfig = await configResponse.json();
 
       // ✅ STEP 2: If DB already has a model, use it (never override!)
@@ -67,9 +68,9 @@ function MeetingDetailsContent() {
       if (hasGemma) {
         console.log('💾 DB empty, using gemma3:1b as initial default');
 
-        await fetch(`${serverAddress}/save-model-config`, {
+        await authFetch('/save-model-config', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          // headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             provider: 'ollama',
             model: 'gemma3:1b',
@@ -99,7 +100,7 @@ function MeetingDetailsContent() {
       // serverAddress might be empty initially
       if (!serverAddress) return;
 
-      const response = await fetch(`${serverAddress}/get-meeting/${meetingId}`);
+      const response = await authFetch(`/get-meeting/${meetingId}`);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -147,7 +148,7 @@ function MeetingDetailsContent() {
       try {
         if (!serverAddress) return;
 
-        const response = await fetch(`${serverAddress}/get-summary/${meetingId}`);
+        const response = await authFetch(`/get-summary/${meetingId}`);
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -283,7 +284,7 @@ function MeetingDetailsContent() {
         console.log(`🔄 Polling for summary for meeting ${meetingId}...`);
         try {
           if (!serverAddress) return;
-          const response = await fetch(`${serverAddress}/get-summary/${meetingId}`);
+          const response = await authFetch(`/get-summary/${meetingId}`);
           if (response.ok) {
             const summary = await response.json();
             if (summary.status !== 'error' && summary.data) {

@@ -4,6 +4,8 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Analytics from '@/lib/analytics';
 import { apiUrl } from '@/lib/config';
+import { authFetch } from '@/lib/api';
+import { useSession } from 'next-auth/react';
 
 interface SidebarItem {
   id: string;
@@ -76,6 +78,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const [serverAddress, setServerAddress] = useState('');
   const [transcriptServerAddress, setTranscriptServerAddress] = useState('');
   const [activeSummaryPolls, setActiveSummaryPolls] = useState<Map<string, NodeJS.Timeout>>(new Map());
+  const { status } = useSession(); // Access Auth Session Check
 
 
   const pathname = usePathname();
@@ -83,10 +86,12 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
   // Extract fetchMeetings as a reusable function
   const fetchMeetings = React.useCallback(async () => {
-    if (serverAddress) {
+    // Only fetch if authenticated and server address is set
+    if (status === 'authenticated' && serverAddress) {
       try {
         console.log('[SidebarProvider] Fetching meetings via HTTP API');
-        const response = await fetch(`${serverAddress}/get-meetings`);
+        // Use authFetch
+        const response = await authFetch('/get-meetings');
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -101,11 +106,11 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
         Analytics.trackBackendConnection(true);
       } catch (error) {
         console.error('Error fetching meetings:', error);
-        setMeetings([]);
+        setMeetings([]); // Clear meetings on error/auth fail
         Analytics.trackBackendConnection(false, error instanceof Error ? error.message : 'Unknown error');
       }
     }
-  }, [serverAddress]);
+  }, [serverAddress, status]);
 
   useEffect(() => {
     fetchMeetings();
@@ -171,11 +176,8 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
     try {
       setIsSearching(true);
-      const response = await fetch(`${serverAddress}/search-transcripts`, {
+      const response = await authFetch('/search-transcripts', { // Use relative URL with authFetch
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
         body: JSON.stringify({ query })
       });
 
@@ -228,7 +230,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       try {
-        const response = await fetch(`${serverAddress}/get-summary/${meetingId}`);
+        const response = await authFetch(`/get-summary/${meetingId}`);
         if (!response.ok) {
           // If 202, it's still processing. If error (400/500), it's failed.
           if (response.status !== 202) {

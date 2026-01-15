@@ -196,6 +196,8 @@ pnpm run dev
 - [Cross-Meeting Search](./CROSS_MEETING_SEARCH.md) - Vector search technical deep dive
 
 ### Feature Guides
+- [Authentication](./AUTH_AND_RBAC.md) - Google OAuth implementation
+- [Permissions & RBAC](./RBAC_SPEC.md) - Workspaces and Meeting roles specification
 - [Catch Me Up](./CATCH_ME_UP.md) - Real-time meeting summaries for late joiners
 - [Ask AI with Context](./ASK_AI_CONTEXT.md) - Linked vs Global context search
 - [Progress Report](./PROGRESS_REPORT.md) - Development milestones and achievements

@@ -95,6 +95,9 @@ Extract action items with owners and deadlines, track status, surface incomplete
 **G7: Answer questions in real-time**
 AI assistant that can answer questions using meeting context and past meeting history during the meeting.
 
+**G8: Secure Access & RBAC**
+Secure access restricted to organization domain (`@appointy.com`), with workspace and meeting-level permissions to ensure privacy and control.
+
 ### ❌ Non-Goals (What We Will NOT Do)
 
 **NG1**: Video/audio conferencing
@@ -109,8 +112,7 @@ We focus on room microphone for on-site meetings. Capturing Zoom/Teams audio req
 **NG4**: Mobile app or mobile browser support
 Desktop/laptop browser only. All participants use laptops.
 
-**NG5**: Complex permissions/authentication
-Simple session-based access. No user accounts, SSO, or role-based permissions for MVP.
+
 
 **NG6**: Enterprise deployment
 Single-instance deployment. No multi-tenant, no cloud scale.

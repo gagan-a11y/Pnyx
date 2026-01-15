@@ -4,6 +4,7 @@ import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummary
 import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { toast } from 'sonner';
 import { apiUrl } from '@/lib/config';
+import { authFetch } from '@/lib/api';
 
 interface UseMeetingDataProps {
   meeting: any;
@@ -40,9 +41,9 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
 
   const handleSaveMeetingTitle = useCallback(async () => {
     try {
-      await fetch(`${serverAddress || apiUrl}/save-meeting-title`, {
+      await authFetch('/save-meeting-title', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           meeting_id: meeting.id,
           title: meetingTitle,
@@ -97,9 +98,9 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
         };
       }
 
-      await fetch(`${serverAddress || apiUrl}/save-summary`, {
+      await authFetch('/save-summary', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           meeting_id: meeting.id,
           summary: formattedSummary,

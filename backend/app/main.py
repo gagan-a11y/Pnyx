@@ -14,6 +14,9 @@ from transcript_processor import TranscriptProcessor
 import time
 import uuid
 from datetime import datetime
+from fastapi import Depends, status
+from auth import get_current_user, User
+from rbac import RBAC
 
 # Load environment variables
 load_dotenv()
@@ -55,6 +58,7 @@ app.add_middleware(
 
 # Global database manager instance for meeting management endpoints
 db = DatabaseManager()
+rbac = RBAC(db)
 
 # New Pydantic models for meeting management
 class Transcript(BaseModel):
@@ -205,18 +209,33 @@ processor = SummaryProcessor()
 
 # New meeting management endpoints
 @app.get("/get-meetings", response_model=List[MeetingResponse])
-async def get_meetings():
-    """Get all meetings with their basic information"""
+async def get_meetings(current_user: User = Depends(get_current_user)):
+    """Get all meetings visible to the current user"""
     try:
+        # Get authorized meeting IDs
+        accessible_ids = await rbac.get_accessible_meetings(current_user)
+        
+        # Get all meetings (TODO: optimize to fetch only accessible in SQL)
         meetings = await db.get_all_meetings()
-        return [{"id": meeting["id"], "title": meeting["title"]} for meeting in meetings]
+        
+        # Filter
+        visible_meetings = [
+            m for m in meetings 
+            if m["id"] in accessible_ids
+        ]
+        
+        return [{"id": meeting["id"], "title": meeting["title"]} for meeting in visible_meetings]
     except Exception as e:
         logger.error(f"Error getting meetings: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/get-meeting/{meeting_id}", response_model=MeetingDetailsResponse)
-async def get_meeting(meeting_id: str):
+async def get_meeting(meeting_id: str, current_user: User = Depends(get_current_user)):
     """Get a specific meeting by ID with all its details"""
+    # Permission Check
+    if not await rbac.can(current_user, 'view', meeting_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     try:
         meeting = await db.get_meeting(meeting_id)
         if not meeting:
@@ -229,8 +248,11 @@ async def get_meeting(meeting_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/save-meeting-title")
-async def save_meeting_title(data: MeetingTitleUpdate):
+async def save_meeting_title(data: MeetingTitleUpdate, current_user: User = Depends(get_current_user)):
     """Save a meeting title"""
+    if not await rbac.can(current_user, 'edit', data.meeting_id):
+        raise HTTPException(status_code=403, detail="Permission denied to edit this meeting")
+
     try:
         await db.update_meeting_title(data.meeting_id, data.title)
         return {"message": "Meeting title saved successfully"}
@@ -239,8 +261,13 @@ async def save_meeting_title(data: MeetingTitleUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/delete-meeting")
-async def delete_meeting(data: DeleteMeetingRequest):
+async def delete_meeting(data: DeleteMeetingRequest, current_user: User = Depends(get_current_user)):
     """Delete a meeting and all its associated data"""
+    # Note: Only OWNER (and maybe workspace admin) can delete.
+    # RBAC 'delete' action handles this logic.
+    if not await rbac.can(current_user, 'delete', data.meeting_id):
+        raise HTTPException(status_code=403, detail="Permission denied to delete this meeting")
+
     try:
         success = await db.delete_meeting(data.meeting_id)
         if success:
@@ -258,8 +285,11 @@ class SaveSummaryRequest(BaseModel):
 
 
 @app.post("/save-summary")
-async def save_summary(data: SaveSummaryRequest):
+async def save_summary(data: SaveSummaryRequest, current_user: User = Depends(get_current_user)):
     """Save or update meeting summary/notes"""
+    if not await rbac.can(current_user, 'edit', data.meeting_id):
+        raise HTTPException(status_code=403, detail="Permission denied to edit summary")
+
     try:
         logger.info(f"Saving summary for meeting {data.meeting_id}")
         
@@ -400,10 +430,27 @@ async def process_transcript_background(process_id: str, transcript: TranscriptR
 @app.post("/process-transcript")
 async def process_transcript_api(
     transcript: TranscriptRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user)
 ):
     """Process a transcript text with background processing"""
     try:
+        # 0. Ensure meeting exists and check permissions
+        meeting = await db.get_meeting(transcript.meeting_id)
+        if not meeting:
+            # New Meeting: Claim Ownership
+            await db.save_meeting(
+                meeting_id=transcript.meeting_id,
+                title="Untitled Meeting", # Default title
+                owner_id=current_user.email,
+                workspace_id=None # Defaults to Personal
+            )
+            logger.info(f"Created new meeting {transcript.meeting_id} for owner {current_user.email}")
+        else:
+            # Existing Meeting: Check Edit Permission
+            if not await rbac.can(current_user, 'edit', transcript.meeting_id):
+                raise HTTPException(status_code=403, detail="Permission denied to edit this meeting")
+
         # Create new process linked to meeting_id
         process_id = await processor.db.create_process(transcript.meeting_id)
 
@@ -440,13 +487,16 @@ async def process_transcript_api(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/generate-detailed-notes")
-async def generate_detailed_notes(request: GenerateNotesRequest, background_tasks: BackgroundTasks):
+async def generate_detailed_notes(request: GenerateNotesRequest, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     """
     Generates detailed meeting notes using Gemini, saves them, and returns the result.
     This is intended for automatic, high-quality note generation post-meeting.
     Uses templates for structured output based on meeting type.
     """
     try:
+        if not await rbac.can(current_user, 'ai_interact', request.meeting_id):
+            raise HTTPException(status_code=403, detail="Permission denied to generate notes")
+
         logger.info(f"Generating detailed notes for meeting {request.meeting_id} using template {request.template_id}")
 
         # 1. Fetch meeting transcripts from the database
@@ -486,7 +536,7 @@ async def generate_detailed_notes(request: GenerateNotesRequest, background_task
 
 
 @app.post("/meetings/{meeting_id}/generate-notes")
-async def generate_notes_for_meeting(meeting_id: str, request: GenerateNotesRequest = None, background_tasks: BackgroundTasks = None):
+async def generate_notes_for_meeting(meeting_id: str, request: GenerateNotesRequest = None, background_tasks: BackgroundTasks = None, current_user: User = Depends(get_current_user)):
     """
     Generate meeting notes for a specific meeting using the selected template.
     This endpoint is designed to be called from the Meeting Details page.
@@ -499,6 +549,9 @@ async def generate_notes_for_meeting(meeting_id: str, request: GenerateNotesRequ
         model: The AI model provider (default: gemini)
         model_name: The specific model name (default: gemini-2.0-flash)
     """
+    if not await rbac.can(current_user, 'ai_interact', meeting_id):
+        raise HTTPException(status_code=403, detail="Permission denied to generate notes")
+
     try:
         # Use path parameter if no request body provided
         actual_meeting_id = meeting_id
@@ -552,11 +605,14 @@ async def generate_notes_for_meeting(meeting_id: str, request: GenerateNotesRequ
 
 
 @app.post("/chat-meeting")
-async def chat_meeting(request: ChatRequest):
+async def chat_meeting(request: ChatRequest, current_user: User = Depends(get_current_user)):
     """
     Chat with a specific meeting using AI.
     Streams the response back to the client.
     """
+    if not await rbac.can(current_user, 'ai_interact', request.meeting_id):
+        raise HTTPException(status_code=403, detail="Permission denied to chat with this meeting")
+
     try:
         logger.info(f"Received chat request for meeting {request.meeting_id}")
         logger.info(f"Allowed meeting IDs: {request.allowed_meeting_ids}")
@@ -620,7 +676,7 @@ async def chat_meeting(request: ChatRequest):
 
 
 @app.post("/catch-up")
-async def catch_up(request: CatchUpRequest):
+async def catch_up(request: CatchUpRequest, current_user: User = Depends(get_current_user)):
     """
     Generate a quick bulleted summary of the meeting so far.
     For late joiners or participants who zoned out.
@@ -765,8 +821,11 @@ async def search_context_endpoint(request: SearchContextRequest):
 
 
 @app.get("/get-summary/{meeting_id}")
-async def get_summary(meeting_id: str):
+async def get_summary(meeting_id: str, current_user: User = Depends(get_current_user)):
     """Get the summary for a given meeting ID"""
+    if not await rbac.can(current_user, 'view', meeting_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     try:
         result = await processor.db.get_transcript_data(meeting_id)
         if not result:
@@ -1090,7 +1149,7 @@ Now generate the meeting notes:"""
             logger.error(f"Failed to update DB status to failed: {db_e}", exc_info=True)
 
 @app.post("/save-transcript")
-async def save_transcript(request: SaveTranscriptRequest, background_tasks: BackgroundTasks):
+async def save_transcript(request: SaveTranscriptRequest, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
     """Save transcript segments for a meeting and automatically generate notes based on template"""
     try:
         logger.info(f"Received save-transcript request for meeting: {request.meeting_title}")
@@ -1105,8 +1164,8 @@ async def save_transcript(request: SaveTranscriptRequest, background_tasks: Back
         # Generate a unique meeting ID
         meeting_id = f"meeting-{int(time.time() * 1000)}"
 
-        # Save the meeting with folder path (if provided)
-        await db.save_meeting(meeting_id, request.meeting_title, folder_path=request.folder_path)
+        # Save the meeting with folder path (if provided) and owner
+        await db.save_meeting(meeting_id, request.meeting_title, folder_path=request.folder_path, owner_id=current_user.email)
 
         # Save each transcript segment with NEW timestamp fields for playback sync
         full_transcript_text = ""

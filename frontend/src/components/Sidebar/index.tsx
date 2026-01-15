@@ -4,8 +4,10 @@ import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, LogOut } from 'lucide-react';
 import { signOut } from 'next-auth/react';
 import { useRouter, usePathname } from 'next/navigation';
-import { useSidebar } from './SidebarProvider';
+import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import type { CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
+import { apiUrl } from '@/lib/config';
+import { authFetch } from '@/lib/api';
 import { ConfirmationModal } from '../ConfirmationModel/confirmation-modal';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SettingTabs } from '../SettingTabs';
@@ -280,9 +282,9 @@ const Sidebar: React.FC = () => {
     console.log('Deleting item:', itemId);
 
     try {
-      const response = await fetch(`${serverAddress}/delete-meeting`, {
+      const response = await authFetch('/delete-meeting', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ meeting_id: itemId }),
       });
 
@@ -346,11 +348,9 @@ const Sidebar: React.FC = () => {
     }
 
     try {
-      const response = await fetch(`${serverAddress}/save-meeting-title`, {
+      const response = await authFetch('/save-meeting-title', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        // headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ meeting_id: meetingId, title: newTitle }),
       });
 

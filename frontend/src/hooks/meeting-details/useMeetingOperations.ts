@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { toast } from 'sonner';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { apiUrl } from '@/lib/config';
+import { authFetch } from '@/lib/api';
 
 interface UseMeetingOperationsProps {
   meeting: any;
@@ -33,9 +34,9 @@ export function useMeetingOperations({
         return;
       }
 
-      const response = await fetch(`${baseUrl}/delete-meeting`, {
+      const response = await authFetch('/delete-meeting', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ meeting_id: meeting.id }),
       });
 

@@ -60,14 +60,15 @@ async def get_current_user(
     token = credentials.credentials
     
     if not GOOGLE_CLIENT_ID:
-        # Dev mode bypass or config error check
-        # For simplicity in this quick implementation, we warn but might fail
-        # Ideally, we should always enforce auth in this new authorized version
-        print("WARNING: GOOGLE_CLIENT_ID not set in backend")
+        print("DEBUG AUTH: GOOGLE_CLIENT_ID is None")
+    else:
+        print(f"DEBUG AUTH: GOOGLE_CLIENT_ID is set (starts with {GOOGLE_CLIENT_ID[:5]})")
     
     try:
         payload = await verify_google_token(token)
+        print(f"DEBUG AUTH: Payload extracted for {payload.get('email')}")
     except Exception as e:
+         print(f"DEBUG AUTH: Verification failed: {str(e)}")
          raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",

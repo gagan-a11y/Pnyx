@@ -6,6 +6,10 @@ import uvicorn
 from typing import Optional, List, Dict
 import logging
 from dotenv import load_dotenv
+
+# Load environment variables before importing local modules
+load_dotenv()
+
 from db import DatabaseManager
 import json
 import asyncio
@@ -17,9 +21,6 @@ from datetime import datetime
 from fastapi import Depends, status
 from auth import get_current_user, User
 from rbac import RBAC
-
-# Load environment variables
-load_dotenv()
 
 # Configure logger with line numbers and function names
 logger = logging.getLogger(__name__)

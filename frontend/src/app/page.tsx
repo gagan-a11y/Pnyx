@@ -771,7 +771,7 @@ export default function Home() {
         // headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: originalTranscript,
-          meeting_id: currentMeeting?.id, // Important for RBAC
+          meeting_id: currentMeeting?.id, // Important for security and ownership
           model: modelConfig.provider,
           modelName: modelConfig.model,
           chunkSize: 40000,

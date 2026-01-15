@@ -2,13 +2,14 @@
 
 import './globals.css'
 import { Source_Sans_3 } from 'next/font/google'
+import { usePathname } from 'next/navigation'
+import { Toaster } from 'sonner'
+import "sonner/dist/styles.css"
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
 import AnalyticsProvider from '@/components/AnalyticsProvider'
 import { AuthProvider } from '@/components/AuthProvider'
-import { Toaster } from 'sonner'
-import "sonner/dist/styles.css"
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { RecordingStateProvider } from '@/contexts/RecordingStateContext'
 import { OllamaDownloadProvider } from '@/contexts/OllamaDownloadContext'
@@ -26,6 +27,9 @@ export default function RootLayout({
 }: {
   children: React.ReactNode
 }) {
+  const pathname = usePathname();
+  const isAuthPage = pathname === '/login';
+
   return (
     <html lang="en">
       <body className={`${sourceSans3.variable} font-sans`}>
@@ -36,10 +40,16 @@ export default function RootLayout({
                 <OllamaDownloadProvider>
                   <TooltipProvider>
                     {/* <div className="titlebar h-8 w-full fixed top-0 left-0 bg-transparent" /> */}
-                    <div className="flex">
-                      <Sidebar />
-                      <MainContent>{children}</MainContent>
-                    </div>
+                    {isAuthPage ? (
+                      <div className="min-h-screen">
+                        {children}
+                      </div>
+                    ) : (
+                      <div className="flex">
+                        <Sidebar />
+                        <MainContent>{children}</MainContent>
+                      </div>
+                    )}
                   </TooltipProvider>
                 </OllamaDownloadProvider>
               </SidebarProvider>

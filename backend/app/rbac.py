@@ -33,11 +33,11 @@ class RBAC:
                 
             owner_id, workspace_id = row
             
+        logger.info(f"RBAC Check: user={user.email}, action={action}, meeting={meeting_id}, owner={owner_id}")
+            
         # 2. Check Ownership (ALLOW ALL)
-        # Note: We compare EMAIL as ID for now since we don't have separate user IDs in auth.py yet
-        # Ensure owner_id is treated as email if that's how we store it.
-        # Current logic: owner_id IS the user's email/id.
-        if owner_id == user.email:
+        # LEGACY SUPPORT: If owner_id is None, allow access (for migration)
+        if owner_id is None or owner_id == user.email:
             return True
 
         # 3. Check Workspace Admin (ALLOW ALL)
@@ -105,6 +105,7 @@ class RBAC:
             LEFT JOIN meeting_permissions mp ON m.id = mp.meeting_id AND mp.user_id = ?
             WHERE 
                 m.owner_id = ?                  -- 1. Owner
+                OR m.owner_id IS NULL           -- 1b. Legacy (No owner)
                 OR (wm.role = 'admin')          -- 2. Workspace Admin
                 OR (mp.role IS NOT NULL)        -- 3. Explicit Invite
         """

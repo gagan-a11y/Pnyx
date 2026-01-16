@@ -26,7 +26,8 @@ import { MicrophoneIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { apiUrl } from '@/lib/config';
-import { authFetch } from '@/lib/api';
+import { authFetch, AuthError } from '@/lib/api';
+import { recoveryService, PendingMeetingData } from '@/lib/transcriptRecovery';
 
 
 
@@ -106,6 +107,62 @@ export default function Home() {
   // State for web audio recording
   const [isRecording, setIsRecording] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
+
+  // Recovery State
+  const [showReauthModal, setShowReauthModal] = useState(false);
+  const [pendingRecoveryId, setPendingRecoveryId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const checkRecoveries = async () => {
+      const pending = await recoveryService.getAllPendingTranscripts();
+      if (pending.length > 0) {
+        toast('Unsaved Transcripts Found', {
+          description: `Found ${pending.length} unsaved meetings. Click to recover.`,
+          action: {
+            label: 'Recover',
+            onClick: () => handleRecoverTranscripts(pending[0])
+          }
+        });
+      }
+    };
+    checkRecoveries();
+  }, []);
+
+  const handleRecoverTranscripts = async (data: PendingMeetingData) => {
+      setMeetingTitle(data.title);
+      setTranscripts(data.transcripts);
+      setCurrentMeeting({ id: 'recovery', title: data.title });
+      setPendingRecoveryId(data.meetingId);
+      toast.success('Restored unsaved meeting', { description: 'Please try saving again.' });
+  };
+
+  // Auto-save effect
+  useEffect(() => {
+    if (!isRecording || transcripts.length === 0) return;
+
+    const intervalId = setInterval(async () => {
+      console.log('[AutoSave] Saving recovery backup...');
+      const recoveryId = pendingRecoveryId || `recovery-${Date.now()}`;
+      const defaultTemplate = localStorage.getItem('selectedTemplate') || 'standard_meeting';
+      
+      try {
+        await recoveryService.savePendingTranscript({
+          meetingId: recoveryId,
+          title: meetingTitle || 'Untitled Meeting',
+          transcripts: transcripts,
+          timestamp: Date.now(),
+          templateId: defaultTemplate
+        });
+        if (!pendingRecoveryId) {
+            setPendingRecoveryId(recoveryId);
+        }
+      } catch (err) {
+        console.warn('[AutoSave] Failed to save backup:', err);
+      }
+    }, 30000); // Every 30 seconds
+
+    return () => clearInterval(intervalId);
+  }, [isRecording, transcripts, meetingTitle, pendingRecoveryId]);
 
   // Catch Me Up feature state
   const [isCatchUpOpen, setIsCatchUpOpen] = useState(false);
@@ -435,7 +492,6 @@ export default function Home() {
       const defaultTemplate = localStorage.getItem('selectedTemplate') || 'standard_meeting';
 
       // Call backend API directly - backend will automatically generate notes based on template
-      // Call backend API directly - backend will automatically generate notes based on template
       const response = await authFetch('/save-transcript', {
         method: 'POST',
         // headers: { 'Content-Type': 'application/json' }, // authFetch handles Content-Type
@@ -452,6 +508,7 @@ export default function Home() {
           folder_path: null,
           template_id: defaultTemplate,
         }),
+        preventLogout: true
       });
 
       if (!response.ok) {
@@ -466,6 +523,12 @@ export default function Home() {
       // Store transcript for LLM post-processing
       const fullTranscript = freshTranscripts.map(t => t.text).join('\n');
       setOriginalTranscript(fullTranscript);
+
+      // Cleanup pending recovery if exists
+      if (pendingRecoveryId) {
+        await recoveryService.deletePendingTranscript(pendingRecoveryId);
+        setPendingRecoveryId(null);
+      }
 
       // Update UI
       await refetchMeetings();
@@ -490,9 +553,32 @@ export default function Home() {
 
     } catch (error) {
       console.error('❌ [Web Audio] Failed to save meeting:', error);
-      toast.error('Failed to save recording', {
-        description: error instanceof Error ? error.message : 'Unknown error'
-      });
+
+      if (error instanceof AuthError) {
+        // Save to recovery
+        const freshTranscripts = transcriptsRef.current;
+        const recoveryId = pendingRecoveryId || `recovery-${Date.now()}`;
+        const defaultTemplate = localStorage.getItem('selectedTemplate') || 'standard_meeting';
+
+        await recoveryService.savePendingTranscript({
+          meetingId: recoveryId,
+          title: meetingTitle || 'Untitled Meeting',
+          transcripts: freshTranscripts,
+          timestamp: Date.now(),
+          templateId: defaultTemplate
+        });
+
+        setPendingRecoveryId(recoveryId);
+        setShowReauthModal(true);
+        toast.error('Session Expired', {
+          description: 'Your session expired while saving. Please log in again to save your meeting.',
+          duration: 10000
+        });
+      } else {
+        toast.error('Failed to save recording', {
+          description: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
     } finally {
       setSummaryStatus('idle');
       setIsSavingTranscript(false);
@@ -1937,6 +2023,36 @@ export default function Home() {
             </motion.div>
           )}
         </>
+      )}
+
+      {/* Re-auth Modal */}
+      {showReauthModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Session Expired</h3>
+            <p className="text-gray-600 mb-6">
+              Your session has expired, but your meeting transcript is safe locally. 
+              Please log in again in a new tab, then click "Retry Save".
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => window.open('/login', '_blank')}
+                className="px-4 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-md"
+              >
+                Log In (New Tab)
+              </button>
+              <button
+                onClick={async () => {
+                   setShowReauthModal(false);
+                   await handleWebAudioRecordingStop();
+                }}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+              >
+                Retry Save
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </motion.div>

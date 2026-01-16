@@ -1,24 +1,36 @@
 import { getSession, signOut } from 'next-auth/react';
 import { apiUrl } from './config';
 
+export class AuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AuthError';
+  }
+}
+
 /**
  * Authenticated Fetch Wrapper
  * Automatically adds Authorization header with JWT token
  * Handles session expiration by forcing logout
  */
-export async function authFetch(endpoint: string, options: RequestInit = {}) {
+export async function authFetch(endpoint: string, options: RequestInit & { preventLogout?: boolean } = {}) {
   const session = await getSession();
   
   if (!session?.idToken) {
     console.warn('[AuthFetch] No active session found');
+    if (options.preventLogout) {
+      throw new AuthError('Unauthorized: No active session');
+    }
     throw new Error('Unauthorized: No active session');
   }
 
   // Handle refresh error - if token rotation failed, force sign out
   if ((session as any).error === "RefreshAccessTokenError") {
     console.error('[AuthFetch] Token refresh failed, forcing logout');
-    signOut({ callbackUrl: '/login' });
-    throw new Error('Session expired: Please log in again');
+    if (!options.preventLogout) {
+      signOut({ callbackUrl: '/login' });
+    }
+    throw new AuthError('Session expired: Please log in again');
   }
 
   // Ensure endpoint starts with / if not absolute
@@ -59,8 +71,10 @@ export async function authFetch(endpoint: string, options: RequestInit = {}) {
 
     // If refresh failed or wasn't triggered, force logout
     console.error('[AuthFetch] Session invalid, forcing logout');
-    signOut({ callbackUrl: '/login' });
-    throw new Error('Session expired: Please log in again');
+    if (!options.preventLogout) {
+      signOut({ callbackUrl: '/login' });
+    }
+    throw new AuthError('Session expired: Please log in again');
   }
 
   return response;

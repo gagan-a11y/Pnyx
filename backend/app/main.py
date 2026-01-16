@@ -1023,12 +1023,10 @@ def get_template_prompt(template_id: str) -> str:
     return templates.get(template_id, templates["standard_meeting"])
 
 async def generate_notes_with_gemini_background(meeting_id: str, transcript_text: str, template_id: str, meeting_title: str, custom_context: str = "", user_email: Optional[str] = None):
-    """Background task to generate meeting notes using Gemini"""
+    """Background task to generate meeting notes using Gemini with support for long transcripts"""
     process_id = None
     try:
         logger.info(f"Starting Gemini note generation for meeting: {meeting_id} with template: {template_id}")
-        if custom_context:
-            logger.info(f"Using custom context: {custom_context[:100]}...")
         
         # Create process for tracking
         process_id = await processor.db.create_process(meeting_id)
@@ -1048,7 +1046,7 @@ async def generate_notes_with_gemini_background(meeting_id: str, transcript_text
         import google.generativeai as genai
         genai.configure(api_key=api_key)
         
-        # Use gemini-2.0-flash for best accuracy and stability
+        # Use gemini-2.0-flash which has a massive context window (1M tokens)
         model_name = "gemini-2.0-flash"
         model = genai.GenerativeModel(model_name)
         
@@ -1064,8 +1062,13 @@ User-Provided Context:
 {custom_context}
 ---
 Use this context to better understand the meeting participants, purpose, and important topics to focus on.
-
 """
+
+        # For very long transcripts, we'll inform the model about the length and ask for a comprehensive summary
+        is_long_meeting = len(transcript_text) > 100000 # ~15k-20k words
+        length_guidance = ""
+        if is_long_meeting:
+            length_guidance = "\nNote: This is a long meeting. Please ensure the summary is comprehensive and covers the entire duration of the transcript without omitting later parts.\n"
         
         # Create comprehensive prompt for note generation
         prompt = f"""You are an expert meeting notes generator. Generate well-structured meeting notes in Markdown format based on the following transcript.
@@ -1073,7 +1076,8 @@ Use this context to better understand the meeting participants, purpose, and imp
 Template Instructions:
 {template_instructions}
 
-{context_section}IMPORTANT GUIDELINES:
+{context_section}{length_guidance}
+IMPORTANT GUIDELINES:
 
 Generate the notes in Markdown format with the following structure:
 
@@ -1108,8 +1112,14 @@ Only include corrections that meaningfully affect understanding (skip minor typo
 
 Now generate the meeting notes:"""
         
-        # Generate notes with Gemini
-        response = await model.generate_content_async(prompt)
+        # Generate notes with Gemini - increase max_output_tokens for long transcripts
+        response = await model.generate_content_async(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                temperature=0.2, # Lower temperature for more factual notes
+                max_output_tokens=8192 # Ensure enough space for detailed notes
+            )
+        )
         
         if not response or not response.text:
             error_msg = "Gemini returned empty response"

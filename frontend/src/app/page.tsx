@@ -940,8 +940,19 @@ export default function Home() {
 
       const transcriptTexts = filteredTranscripts.map(t => t.text);
 
+      // Optimization: Limit the number of transcripts sent to prevent payload size issues
+      // 1000 transcripts is roughly 1.5 - 2 hours of meeting data
+      const MAX_CATCHUP_TRANSCRIPTS = 1000;
+      const limitedTranscriptTexts = transcriptTexts.length > MAX_CATCHUP_TRANSCRIPTS 
+        ? transcriptTexts.slice(-MAX_CATCHUP_TRANSCRIPTS) 
+        : transcriptTexts;
+
+      if (transcriptTexts.length > MAX_CATCHUP_TRANSCRIPTS) {
+        console.warn(`[CatchUp] Truncating ${transcriptTexts.length} transcripts to latest ${MAX_CATCHUP_TRANSCRIPTS} to prevent payload size issues.`);
+      }
+
       const timeLabel = minutes ? `last ${minutes} minutes` : 'entire meeting';
-      console.log(`[CatchUp] Summarizing ${timeLabel}: ${transcriptTexts.length} transcripts`);
+      console.log(`[CatchUp] Summarizing ${timeLabel}: ${limitedTranscriptTexts.length} transcripts`);
 
       // The catch-up endpoint currently only supports gemini and groq
       const supportedProviders = ['gemini', 'groq'];
@@ -957,7 +968,7 @@ export default function Home() {
       const response = await authFetch('/catch-up', {
         method: 'POST',
         body: JSON.stringify({
-          transcripts: transcriptTexts,
+          transcripts: limitedTranscriptTexts,
           model: provider,
           model_name: modelName
         })

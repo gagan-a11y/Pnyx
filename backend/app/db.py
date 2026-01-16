@@ -452,8 +452,8 @@ class DatabaseManager:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
 
-                # Check if meeting exists
-                cursor.execute("SELECT id FROM meetings WHERE id = ? OR title = ?", (meeting_id, title))
+                # Check if meeting exists - Only check by ID, as multiple meetings can have same title
+                cursor.execute("SELECT id FROM meetings WHERE id = ?", (meeting_id,))
                 existing_meeting = cursor.fetchone()
 
                 if not existing_meeting:
@@ -465,6 +465,8 @@ class DatabaseManager:
                     logger.info(f"Saved meeting {meeting_id} (Owner: {owner_id}, WS: {workspace_id})")
                 else:
                     # If we get here and meeting exists, throw error since we don't want duplicates
+                    # Actually, for an existing meeting ID, we might want to allow updating the title
+                    # but the PRD suggests save_meeting is for creation.
                     raise Exception(f"Meeting with ID {meeting_id} already exists")
                 conn.commit()
                 return True

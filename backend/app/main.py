@@ -147,6 +147,15 @@ class GenerateNotesRequest(BaseModel):
     custom_context: str = ""  # User-provided context for better note generation
 
 
+class RefineNotesRequest(BaseModel):
+    """Request model for refining meeting notes."""
+    meeting_id: str
+    current_notes: str
+    user_instruction: str
+    model: str = "gemini"
+    model_name: str = "gemini-2.0-flash"
+
+
 class SummaryProcessor:
     """Handles the processing of summaries in a thread-safe way"""
     def __init__(self):
@@ -789,6 +798,122 @@ Quick Catch-Up Summary:"""
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+
+@app.post("/refine-notes")
+async def refine_notes(request: RefineNotesRequest, current_user: User = Depends(get_current_user)):
+    """
+    Refine existing meeting notes based on user instructions and transcript context.
+    Streams the refined notes back.
+    """
+    if not await rbac.can(current_user, 'ai_interact', request.meeting_id):
+        raise HTTPException(status_code=403, detail="Permission denied to refine notes")
+
+    try:
+        logger.info(f"Refining notes for meeting {request.meeting_id} with instruction: {request.user_instruction[:50]}...")
+
+        # 1. Fetch meeting transcripts for context
+        meeting_data = await db.get_meeting(request.meeting_id)
+        full_transcript = ""
+        if meeting_data and meeting_data.get('transcripts'):
+             full_transcript = "\n".join([t['text'] for t in meeting_data['transcripts']])
+
+        # 2. Construct Prompt
+        refine_prompt = f"""You are an expert meeting notes editor.
+Your task is to REFINE the Current Meeting Notes based strictly on the User Instruction and the provided Context (Transcript).
+
+Context (Meeting Transcript):
+---
+{full_transcript[:30000]} {(len(full_transcript) > 30000) and "...(truncated)" or ""}
+---
+
+Current Meeting Notes:
+---
+{request.current_notes}
+---
+
+User Instruction: {request.user_instruction}
+
+Guidelines:
+1. You MUST start your response with a brief summary of changes (e.g., "I've removed...").
+2. You MUST then output exactly: "|||SEPARATOR|||" (without quotes).
+3. After the separator, provide the FULL updated notes content.
+4. Do NOT wrap the output in markdown code blocks like ```markdown ... ```.
+5. The content after the separator must be the direct markdown content of the notes.
+6. Use the Transcript to ensure accuracy if adding details.
+
+Strict Output Structure:
+[Brief Summary of Changes]
+|||SEPARATOR|||
+[Full Updated Notes Markdown Content]"""
+
+        # 3. Stream Response (similar to catch_up)
+        async def generate_refinement():
+            try:
+                if request.model == "groq":
+                    api_key = await db.get_api_key("groq", user_email=current_user.email)
+                    if not api_key:
+                        import os
+                        api_key = os.getenv("GROQ_API_KEY")
+                    if not api_key:
+                        yield "Error: Groq API key not configured"
+                        return
+                    
+                    from groq import AsyncGroq
+                    client = AsyncGroq(api_key=api_key)
+                    
+                    stream = await client.chat.completions.create(
+                        messages=[{"role": "user", "content": refine_prompt}],
+                        model=request.model_name,
+                        stream=True,
+                        max_tokens=2000, 
+                        temperature=0.3,
+                    )
+                    
+                    async for chunk in stream:
+                        content = chunk.choices[0].delta.content or ""
+                        if content:
+                            yield content
+
+                elif request.model == "gemini":
+                    api_key = await db.get_api_key("gemini", user_email=current_user.email)
+                    if not api_key:
+                        import os
+                        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+                    if not api_key:
+                        yield "Error: Gemini API key not configured"
+                        return
+
+                    import google.generativeai as genai
+                    genai.configure(api_key=api_key)
+                    
+                    # Ensure properly named model
+                    model_name = request.model_name
+                    if not model_name.startswith("gemini-"):
+                         model_name = f"gemini-{model_name}" if "gemini" not in model_name else model_name
+                    
+                    try:
+                        model = genai.GenerativeModel(model_name)
+                        response = model.generate_content(refine_prompt, stream=True)
+                        
+                        for chunk in response:
+                            if chunk.text:
+                                yield chunk.text
+                    except Exception as e:
+                        logger.error(f"Gemini generation error: {e}")
+                        yield f"Error generating refinement with Gemini: {str(e)}"
+                else:
+                     yield f"Error: Model {request.model} not supported for refinement yet."
+
+            except Exception as e:
+                logger.error(f"Error generating refinement: {e}", exc_info=True)
+                yield f"Error: {str(e)}"
+
+        return StreamingResponse(generate_refinement(), media_type="text/plain")
+
+    except Exception as e:
+        logger.error(f"Error in refine_notes: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/search-context")

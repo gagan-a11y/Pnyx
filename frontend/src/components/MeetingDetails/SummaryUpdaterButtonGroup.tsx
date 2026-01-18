@@ -2,7 +2,7 @@
 
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
-import { Copy, Save, Loader2, Search, FolderOpen } from 'lucide-react';
+import { Copy, Save, Loader2, Search, FolderOpen, Sparkles } from 'lucide-react';
 import Analytics from '@/lib/analytics';
 
 interface SummaryUpdaterButtonGroupProps {
@@ -12,6 +12,7 @@ interface SummaryUpdaterButtonGroupProps {
   onCopy: () => Promise<void>;
   onFind?: () => void;
   onOpenFolder: () => Promise<void>;
+  onRefine?: () => void;
   hasSummary: boolean;
 }
 
@@ -22,10 +23,25 @@ export function SummaryUpdaterButtonGroup({
   onCopy,
   onFind,
   onOpenFolder,
+  onRefine,
   hasSummary
 }: SummaryUpdaterButtonGroupProps) {
   return (
     <ButtonGroup>
+      {/* Refine Button */}
+      {onRefine && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="bg-purple-50 hover:bg-purple-100 border-purple-200 text-purple-700"
+          onClick={onRefine}
+          title="Refine with AI"
+        >
+          <Sparkles className="w-4 h-4 lg:mr-2" />
+          <span className="hidden lg:inline">Refine</span>
+        </Button>
+      )}
+
       {/* Save button */}
       <Button
         variant="outline"

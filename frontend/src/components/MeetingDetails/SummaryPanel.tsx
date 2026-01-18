@@ -8,7 +8,8 @@ import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SummaryGeneratorButtonGroup } from './SummaryGeneratorButtonGroup';
 import { SummaryUpdaterButtonGroup } from './SummaryUpdaterButtonGroup';
 import Analytics from '@/lib/analytics';
-import { RefObject } from 'react';
+import { RefObject, useState } from 'react';
+import { RefineNotesSidebar } from './RefineNotesSidebar';
 
 import { Trash2 } from 'lucide-react'; // Add Trash2 icon
 
@@ -36,7 +37,6 @@ interface SummaryPanelProps {
   setModelConfig: (config: ModelConfig | ((prev: ModelConfig) => ModelConfig)) => void;
   onSaveModelConfig: (config?: ModelConfig) => Promise<void>;
   onGenerateSummary: (customPrompt: string) => Promise<void>;
-  customPrompt: string;
   summaryResponse: SummaryResponse | null;
   onSaveSummary: (summary: Summary | { markdown?: string; summary_json?: any[] }) => Promise<void>;
   onSummaryChange: (summary: Summary) => void;
@@ -71,7 +71,6 @@ export function SummaryPanel({
   setModelConfig,
   onSaveModelConfig,
   onGenerateSummary,
-  customPrompt,
   summaryResponse,
   onSaveSummary,
   onSummaryChange,
@@ -86,6 +85,27 @@ export function SummaryPanel({
   onDeleteMeeting
 }: SummaryPanelProps) {
   const isSummaryLoading = summaryStatus === 'processing' || summaryStatus === 'summarizing' || summaryStatus === 'regenerating';
+  const [isRefineSidebarOpen, setIsRefineSidebarOpen] = useState(false);
+  const [currentNotesContent, setCurrentNotesContent] = useState('');
+
+  const handleOpenRefine = async () => {
+    if (summaryRef.current) {
+      const md = await summaryRef.current.getMarkdown();
+      setCurrentNotesContent(md);
+      setIsRefineSidebarOpen(true);
+    }
+  };
+
+  const handleApplyRefinement = (newNotes: string) => {
+    // Construct a summary object that simulates markdown format so BlockNoteView picks it up
+    const updatedSummary = {
+      markdown: newNotes
+    } as any;
+
+    onSummaryChange(updatedSummary);
+    setIsRefineSidebarOpen(false);
+  };
+
 
   return (
     <div className="flex-1 min-w-0 flex flex-col bg-white overflow-hidden">
@@ -121,7 +141,6 @@ export function SummaryPanel({
               setModelConfig={setModelConfig}
               onSaveModelConfig={onSaveModelConfig}
               onGenerateSummary={onGenerateSummary}
-              customPrompt={customPrompt}
               summaryStatus={summaryStatus}
               availableTemplates={availableTemplates}
               selectedTemplate={selectedTemplate}
@@ -143,6 +162,7 @@ export function SummaryPanel({
                 console.log('Find in summary clicked');
               }}
               onOpenFolder={onOpenFolder}
+              onRefine={handleOpenRefine}
               hasSummary={!!aiSummary}
             />
           </div>
@@ -160,7 +180,6 @@ export function SummaryPanel({
                 setModelConfig={setModelConfig}
                 onSaveModelConfig={onSaveModelConfig}
                 onGenerateSummary={onGenerateSummary}
-                customPrompt={customPrompt}
                 summaryStatus={summaryStatus}
                 availableTemplates={availableTemplates}
                 selectedTemplate={selectedTemplate}
@@ -186,7 +205,6 @@ export function SummaryPanel({
                 setModelConfig={setModelConfig}
                 onSaveModelConfig={onSaveModelConfig}
                 onGenerateSummary={onGenerateSummary}
-                customPrompt={customPrompt}
                 summaryStatus={summaryStatus}
                 availableTemplates={availableTemplates}
                 selectedTemplate={selectedTemplate}
@@ -197,7 +215,7 @@ export function SummaryPanel({
             </div>
             {/* Empty state message */}
             <EmptyStateSummary
-              onGenerate={() => onGenerateSummary(customPrompt)}
+              onGenerate={() => onGenerateSummary('')}
               hasModel={modelConfig.provider !== null && modelConfig.model !== null}
               isGenerating={isSummaryLoading}
             />
@@ -280,6 +298,15 @@ export function SummaryPanel({
           </div>
         )
       }
-    </div >
+
+      {isRefineSidebarOpen && (
+        <RefineNotesSidebar
+          meetingId={meeting.id}
+          onClose={() => setIsRefineSidebarOpen(false)}
+          currentNotes={currentNotesContent}
+          onApplyRefinement={handleApplyRefinement}
+        />
+      )}
+    </div>
   );
 }

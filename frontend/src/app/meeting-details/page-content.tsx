@@ -41,7 +41,6 @@ export default function PageContent({
   });
 
   // State
-  const [customPrompt, setCustomPrompt] = useState<string>('');
   const [isRecording] = useState(false);
   const [summaryResponse] = useState<SummaryResponse | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -166,8 +165,6 @@ export default function PageContent({
 
         <TranscriptPanel
           transcripts={meetingData.transcripts}
-          customPrompt={customPrompt}
-          onPromptChange={setCustomPrompt}
           onCopyTranscript={copyOperations.handleCopyTranscript}
           onOpenMeetingFolder={meetingOperations.handleOpenMeetingFolder}
           isRecording={isRecording}
@@ -193,7 +190,6 @@ export default function PageContent({
           setModelConfig={modelConfig.setModelConfig}
           onSaveModelConfig={modelConfig.handleSaveModelConfig}
           onGenerateSummary={summaryGeneration.handleGenerateSummary}
-          customPrompt={customPrompt}
           summaryResponse={summaryResponse}
           onSaveSummary={meetingData.handleSaveSummary}
           onSummaryChange={meetingData.handleSummaryChange}

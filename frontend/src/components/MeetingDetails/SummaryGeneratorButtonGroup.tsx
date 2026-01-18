@@ -26,7 +26,6 @@ interface SummaryGeneratorButtonGroupProps {
   setModelConfig: (config: ModelConfig | ((prev: ModelConfig) => ModelConfig)) => void;
   onSaveModelConfig: (config?: ModelConfig) => Promise<void>;
   onGenerateSummary: (customPrompt: string) => Promise<void>;
-  customPrompt: string;
   summaryStatus: 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
   availableTemplates: Array<{ id: string, name: string, description: string }>;
   selectedTemplate: string;
@@ -40,7 +39,6 @@ export function SummaryGeneratorButtonGroup({
   setModelConfig,
   onSaveModelConfig,
   onGenerateSummary,
-  customPrompt,
   summaryStatus,
   availableTemplates,
   selectedTemplate,
@@ -58,7 +56,7 @@ export function SummaryGeneratorButtonGroup({
   const checkOllamaModelsAndGenerate = async () => {
     // Only check for Ollama provider
     if (modelConfig.provider !== 'ollama') {
-      onGenerateSummary(customPrompt);
+      onGenerateSummary('');
       return;
     }
 
@@ -84,7 +82,7 @@ export function SummaryGeneratorButtonGroup({
       }
 
       // Models are available, proceed with generation
-      onGenerateSummary(customPrompt);
+      onGenerateSummary('');
     } catch (error) {
       console.error('Error checking Ollama models:', error);
       toast.error(

@@ -266,3 +266,162 @@ class SileroVAD:
             # Fallback to SimpleVAD behavior
             fallback = SimpleVAD(threshold=0.02)
             return fallback.get_speech_segments(audio, min_speech_duration_ms, min_silence_duration_ms)
+
+
+class TenVAD:
+    """
+    Voice Activity Detection using TEN VAD (C++ based, high performance).
+    
+    Requires 'ten-vad' package and libc++.
+    Operates strictly on 16kHz int16 audio in 256 sample chunks.
+    """
+
+    def __init__(self, threshold: float = 0.5, sample_rate: int = 16000):
+        """
+        Args:
+            threshold: Speech probability threshold (0.0-1.0). Default 0.5.
+            sample_rate: Audio sample rate (must be 16000).
+        """
+        if sample_rate != 16000:
+            logger.warning("TEN VAD only supports 16kHz. Resampling might be needed by caller.")
+        
+        try:
+            from ten_vad import TenVad
+            # Initialize TenVad with default hop_size=256
+            self.hop_size = 256
+            self.vad = TenVad(hop_size=self.hop_size, threshold=threshold)
+            self.sample_rate = 16000
+            self.threshold = threshold
+            logger.info(f"✅ TenVAD initialized (threshold={threshold})")
+            
+        except ImportError:
+            logger.error("❌ ten-vad package not found. Install with `pip install ten-vad`.")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize TenVAD: {e}")
+            raise ImportError(f"TenVAD initialization failed (missing libc++?): {e}")
+
+    def is_speech(self, audio_chunk: np.ndarray) -> bool:
+        """
+        Check if audio chunk contains speech.
+
+        Args:
+            audio_chunk: NumPy array of audio samples (int16 or float32)
+
+        Returns:
+            True if speech detected in any frame of the chunk.
+        """
+        try:
+            # Ensure int16
+            if audio_chunk.dtype == np.float32:
+                # Clip and convert to int16
+                audio_int16 = (np.clip(audio_chunk, -1.0, 1.0) * 32767).astype(np.int16)
+            elif audio_chunk.dtype == np.int16:
+                audio_int16 = audio_chunk
+            else:
+                # Try to cast
+                audio_int16 = audio_chunk.astype(np.int16)
+
+            # Process in hop_size chunks
+            total_samples = len(audio_int16)
+            
+            # If smaller than hop_size, pad it
+            if total_samples < self.hop_size:
+                padding = np.zeros(self.hop_size - total_samples, dtype=np.int16)
+                audio_int16 = np.concatenate([audio_int16, padding])
+                total_samples = self.hop_size
+
+            is_speech_detected = False
+            
+            # Iterate
+            for i in range(0, total_samples, self.hop_size):
+                chunk = audio_int16[i : i + self.hop_size]
+                
+                # Check for exact size (drop last partial chunk if any, though padding handled most)
+                if len(chunk) == self.hop_size:
+                    prob, flags = self.vad.process(chunk)
+                    # flags: 1 for speech, 0 for silence? Or prob > threshold?
+                    # The doc says prob is returned. 
+                    # Based on usage, we rely on prob > threshold (already set in init) 
+                    # BUT wait, the init takes threshold. Does process return bool based on it?
+                    # The C code signature returns prob and flags.
+                    # Let's assume prob is the confidence.
+                    
+                    if prob > self.threshold:
+                         is_speech_detected = True
+                         # We can return early if we just want to know "is there speech?"
+                         return True
+            
+            return is_speech_detected
+
+        except Exception as e:
+            logger.error(f"TenVAD error: {e}")
+            return False
+
+    def get_speech_segments(
+        self,
+        audio: np.ndarray,
+        min_speech_duration_ms: int = 250,
+        min_silence_duration_ms: int = 500
+    ) -> List[dict]:
+        """
+        Get timestamps of speech segments using TenVAD.
+        
+        Args:
+            audio: Full audio array
+            min_speech_duration_ms: Minimum speech duration (ms)
+            min_silence_duration_ms: Minimum silence to split segments (ms)
+            
+        Returns:
+            List of {'start': ms, 'end': ms} dicts
+        """
+        # Convert to int16
+        if audio.dtype == np.float32:
+             audio_int16 = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
+        else:
+             audio_int16 = audio.astype(np.int16)
+
+        segments = []
+        current_segment_start = None
+        silence_duration = 0
+        
+        # We need to process in exact hop_size
+        chunk_size = self.hop_size # 256 samples = 16ms
+        chunk_duration_ms = (chunk_size / self.sample_rate) * 1000
+        
+        for i in range(0, len(audio_int16), chunk_size):
+            chunk = audio_int16[i : i + chunk_size]
+            if len(chunk) < chunk_size:
+                break # Drop last partial chunk
+            
+            prob, flags = self.vad.process(chunk)
+            is_speech = prob > self.threshold
+            timestamp_ms = (i / self.sample_rate) * 1000
+            
+            if is_speech:
+                silence_duration = 0
+                if current_segment_start is None:
+                    current_segment_start = timestamp_ms
+            else:
+                silence_duration += chunk_duration_ms
+                
+                if current_segment_start is not None and silence_duration >= min_silence_duration_ms:
+                    segment_duration = timestamp_ms - current_segment_start
+                    if segment_duration >= min_speech_duration_ms:
+                        segments.append({
+                            'start': int(current_segment_start),
+                            'end': int(timestamp_ms)
+                        })
+                    current_segment_start = None
+
+        # Final segment
+        if current_segment_start is not None:
+            final_timestamp = (len(audio_int16) / self.sample_rate) * 1000
+            segment_duration = final_timestamp - current_segment_start
+            if segment_duration >= min_speech_duration_ms:
+                 segments.append({
+                    'start': int(current_segment_start),
+                    'end': int(final_timestamp)
+                })
+                
+        return segments

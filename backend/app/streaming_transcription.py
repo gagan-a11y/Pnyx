@@ -20,14 +20,7 @@ from typing import Optional, Callable, Set
 from concurrent.futures import ThreadPoolExecutor
 from groq_client import GroqTranscriptionClient
 from rolling_buffer import RollingAudioBuffer
-
-# Try to import Silero VAD, fallback to SimpleVAD
-try:
-    from vad import SileroVAD
-    USE_SILERO = True
-except ImportError:
-    from vad import SimpleVAD
-    USE_SILERO = False
+from vad import SimpleVAD, SileroVAD, TenVAD
 
 logger = logging.getLogger(__name__)
 
@@ -44,19 +37,28 @@ class StreamingTranscriptionManager:
         """
         self.groq = GroqTranscriptionClient(groq_api_key)
         
-        # Use Silero VAD if available (ML-based, more accurate)
-        if USE_SILERO:
+        # VAD Initialization Strategy: TenVAD > SileroVAD > SimpleVAD
+        self.vad = None
+        
+        # 1. Try TenVAD (High Performance C++)
+        try:
+            self.vad = TenVAD(threshold=0.5)
+            logger.info("✅ Using TenVAD (C++ based)")
+        except Exception as e:
+            logger.warning(f"⚠️ TenVAD failed to load: {e}")
+        
+        # 2. Try SileroVAD (ML based, PyTorch)
+        if self.vad is None:
             try:
                 self.vad = SileroVAD(threshold=0.5)
                 logger.info("✅ Using SileroVAD (ML-based)")
             except Exception as e:
-                logger.warning(f"⚠️ SileroVAD failed to load: {e}. Using SimpleVAD.")
-                from vad import SimpleVAD
-                self.vad = SimpleVAD(threshold=0.08)
-        else:
-            from vad import SimpleVAD
+                logger.warning(f"⚠️ SileroVAD failed to load: {e}")
+        
+        # 3. Fallback to SimpleVAD (Amplitude based)
+        if self.vad is None:
             self.vad = SimpleVAD(threshold=0.08)
-            logger.info("ℹ️ Using SimpleVAD (torch not available)")
+            logger.info("ℹ️ Using SimpleVAD (Fallback)")
         
         # IMPROVED: Reduced overlap for less duplication
         # 12s window, 10.5s slide = 1.5s overlap (was 3s)

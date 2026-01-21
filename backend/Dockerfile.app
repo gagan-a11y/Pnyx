@@ -4,10 +4,12 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies and ffmpeg (static binary for faster build)
+# Install system dependencies, ffmpeg, and postgres client libs
 RUN apt-get update && apt-get install -y \
     curl \
     xz-utils \
+    libpq-dev \
+    gcc \
     && rm -rf /var/lib/apt/lists/* \
     && curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz \
     && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp \
@@ -32,6 +34,7 @@ RUN mkdir -p /app/data /app/logs
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV DATABASE_PATH=/app/data/meeting_minutes.db
+ENV DATABASE_URL=postgresql://neondb_owner:npg_3JYK7ySezjrT@ep-morning-truth-ahrz730e-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require
 
 # Expose the port the app runs on
 EXPOSE 5167

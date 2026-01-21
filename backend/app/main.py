@@ -24,11 +24,11 @@ from rbac import RBAC
 
 # Configure logger with line numbers and function names
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 # Create console handler with formatting
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)
+console_handler.setLevel(logging.INFO)
 
 # Create formatter with line numbers and function names
 formatter = logging.Formatter(
@@ -174,7 +174,7 @@ class SummaryProcessor:
             logger.error(f"Failed to initialize SummaryProcessor: {str(e)}", exc_info=True)
             raise
 
-    async def process_transcript(self, text: str, model: str, model_name: str, chunk_size: int = 5000, overlap: int = 1000, custom_prompt: str = "Generate a summary of the meeting transcript.") -> tuple:
+    async def process_transcript(self, text: str, model: str = "gemini", model_name: str = "gemini-2.0-flash", chunk_size: int = 5000, overlap: int = 1000, custom_prompt: str = "Generate a summary of the meeting transcript.") -> tuple:
         """Process a transcript text"""
         try:
             if not text:
@@ -1523,6 +1523,8 @@ from streaming_transcription import StreamingTranscriptionManager
 
 # Global streaming managers (one per session)
 streaming_managers = {}
+# Track active connections per session to prevent premature cleanup
+active_connections = {}
 
 @app.websocket("/ws/streaming-audio")
 async def websocket_streaming_audio(websocket: WebSocket, session_id: Optional[str] = None, user_email: Optional[str] = None):
@@ -1563,6 +1565,12 @@ async def websocket_streaming_audio(websocket: WebSocket, session_id: Optional[s
         streaming_managers[session_id] = manager
         logger.info(f"[Streaming] ✅ Session {session_id} started (HYBRID mode)")
 
+    # Register active connection
+    if session_id not in active_connections:
+        active_connections[session_id] = 0
+    active_connections[session_id] += 1
+    logger.debug(f"[Streaming] Session {session_id} active connections: {active_connections[session_id]}")
+
     # Send connection confirmation
     await websocket.send_json({
         "type": "connected",
@@ -1574,46 +1582,55 @@ async def websocket_streaming_audio(websocket: WebSocket, session_id: Optional[s
     # Define callbacks for partial and final transcripts
     async def on_partial(data):
         """Send partial (gray, updating) transcript to browser"""
-        await websocket.send_json({
-            "type": "partial",
-            "text": data["text"],
-            "confidence": data["confidence"],
-            "is_stable": data.get("is_stable", False),
-            "timestamp": datetime.utcnow().isoformat()
-        })
-        logger.debug(f"[Streaming] Partial: {data['text'][:50]}...")
+        try:
+            await websocket.send_json({
+                "type": "partial",
+                "text": data["text"],
+                "confidence": data["confidence"],
+                "is_stable": data.get("is_stable", False),
+                "timestamp": datetime.utcnow().isoformat()
+            })
+            logger.debug(f"[Streaming] Partial: {data['text'][:50]}...")
+        except Exception as e:
+            logger.debug(f"Failed to send partial: {e}")
 
     async def on_final(data):
         """Send final (black, locked) transcript to browser"""
-        response = {
-            "type": "final",
-            "text": data["text"],
-            "confidence": data["confidence"],
-            "reason": data.get("reason", "unknown"),
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        try:
+            response = {
+                "type": "final",
+                "text": data["text"],
+                "confidence": data["confidence"],
+                "reason": data.get("reason", "unknown"),
+                "timestamp": datetime.utcnow().isoformat()
+            }
 
-        # Include translation metadata if available
-        if data.get("original_text"):
-            response["original_text"] = data["original_text"]
-            response["translated"] = data.get("translated", False)
+            # Include translation metadata if available
+            if data.get("original_text"):
+                response["original_text"] = data["original_text"]
+                response["translated"] = data.get("translated", False)
 
-        await websocket.send_json(response)
+            await websocket.send_json(response)
 
-        # Log with translation info
-        if data.get("translated"):
-            logger.info(f"[Streaming] Final (EN): {data['text'][:50]}... (HI: {data.get('original_text', '')[:30]}...)")
-        else:
-            logger.info(f"[Streaming] Final: {data['text'][:50]}... (reason: {data.get('reason')})")
+            # Log with translation info
+            if data.get("translated"):
+                logger.info(f"[Streaming] Final (EN): {data['text'][:50]}... (HI: {data.get('original_text', '')[:30]}...)")
+            else:
+                logger.info(f"[Streaming] Final: {data['text'][:50]}... (reason: {data.get('reason')})")
+        except Exception as e:
+            logger.warning(f"Failed to send final: {e}")
 
     async def on_error(message: str):
         """Send error message to browser"""
-        await websocket.send_json({
-            "type": "error",
-            "message": message,
-            "timestamp": datetime.utcnow().isoformat()
-        })
-        logger.warning(f"[Streaming] Error sent to client: {message}")
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": message,
+                "timestamp": datetime.utcnow().isoformat()
+            })
+            logger.warning(f"[Streaming] Error sent to client: {message}")
+        except Exception:
+            pass
 
     try:
         chunk_count = 0
@@ -1643,27 +1660,49 @@ async def websocket_streaming_audio(websocket: WebSocket, session_id: Optional[s
         logger.info(f"[Streaming] Session {session_id} disconnected by client")
 
     except Exception as e:
-        logger.error(
-            f"[Streaming] Error in session {session_id}: {str(e)}",
-            exc_info=True
-        )
-        try:
-            await websocket.send_json({
-                "type": "error",
-                "message": str(e),
-                "timestamp": datetime.utcnow().isoformat()
-            })
-        except:
-            pass
+        error_msg = str(e)
+        # Suppress benign shutdown race condition errors
+        if "cannot schedule new futures after shutdown" in error_msg:
+            logger.warning(f"[Streaming] Ignored benign shutdown error in session {session_id}: {error_msg}")
+        else:
+            logger.error(
+                f"[Streaming] Error in session {session_id}: {error_msg}",
+                exc_info=True
+            )
+            try:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": error_msg,
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+            except:
+                pass
 
     finally:
-        # Cleanup
-        if session_id in streaming_managers:
-            manager = streaming_managers[session_id]
-            manager.cleanup()
-            del streaming_managers[session_id]
-
-        logger.info(f"[Streaming] Session {session_id} cleaned up")
+        # Decrement active connection count
+        if session_id in active_connections:
+            active_connections[session_id] -= 1
+            logger.debug(f"[Streaming] Session {session_id} active connections remaining: {active_connections[session_id]}")
+            
+            # Only cleanup if no active connections left
+            if active_connections[session_id] <= 0:
+                if session_id in streaming_managers:
+                    manager = streaming_managers[session_id]
+                    manager.cleanup()
+                    del streaming_managers[session_id]
+                    logger.info(f"[Streaming] Session {session_id} resources cleaned up (no active connections)")
+                
+                # Cleanup counter
+                del active_connections[session_id]
+            else:
+                logger.info(f"[Streaming] Session {session_id} kept alive (connections pending)")
+        else:
+            # Fallback cleanup if session tracking lost
+            if session_id in streaming_managers:
+                manager = streaming_managers[session_id]
+                manager.cleanup()
+                del streaming_managers[session_id]
+                logger.info(f"[Streaming] Session {session_id} cleaned up (fallback)")
 
 
 @app.get("/list-meetings")
@@ -1687,16 +1726,27 @@ async def list_meetings():
 @app.post("/admin/reindex-all")
 async def reindex_all():
     """Admin endpoint to re-index all past meetings into ChromaDB."""
+    debug_logs = []
     try:
+        try:
+            import sentence_transformers
+            debug_logs.append("sentence_transformers imported successfully")
+        except ImportError:
+            logger.error("sentence-transformers not installed")
+            raise HTTPException(status_code=500, detail="sentence-transformers library is missing on the server")
+
         from vector_store import store_meeting_embeddings
         
         # 1. Fetch all meetings
         meetings = await db.get_all_meetings()
+        debug_logs.append(f"Fetched {len(meetings)} meetings from DB")
         logger.info(f"Re-indexing {len(meetings)} meetings...")
         
         count = 0
         successful = 0
         failed = 0
+        skipped = 0
+        errors = []
         
         for m in meetings:
             meeting_id = m["id"]
@@ -1704,23 +1754,47 @@ async def reindex_all():
             try:
                 # 2. Get full details including transcripts
                 meeting_data = await db.get_meeting(meeting_id)
-                if not meeting_data or not meeting_data.get("transcripts"):
+                transcripts = []
+                
+                if meeting_data and meeting_data.get("transcripts"):
+                    transcripts = meeting_data.get("transcripts")
+                    debug_logs.append(f"Meeting {meeting_id}: Found {len(transcripts)} transcripts in structure")
+                else:
+                    # Fallback to full_transcripts table
+                    full_text = await db.get_full_transcript_text(meeting_id)
+                    if full_text:
+                        logger.info(f"Using fallback full transcript for {meeting_id}")
+                        transcripts = [{
+                            "text": full_text,
+                            "timestamp": meeting_data.get("created_at") if meeting_data else "",
+                            "id": meeting_id
+                        }]
+                        debug_logs.append(f"Meeting {meeting_id}: Found full transcript text")
+                    else:
+                        debug_logs.append(f"Meeting {meeting_id}: No transcripts found")
+
+                if not transcripts:
                     logger.info(f"Skipping {meeting_id}: no transcripts")
+                    skipped += 1
                     continue
                     
                 # 3. Store in vector DB (sequential processing to avoid ChromaDB race conditions)
                 num_chunks = await store_meeting_embeddings(
                     meeting_id=meeting_id,
-                    meeting_title=meeting_data.get("title", "Untitled"),
-                    meeting_date=meeting_data.get("created_at", ""),
-                    transcripts=meeting_data.get("transcripts", [])
+                    meeting_title=meeting_data.get("title", "Untitled") if meeting_data else m["title"],
+                    meeting_date=meeting_data.get("created_at", "") if meeting_data else m.get("created_at", ""),
+                    transcripts=transcripts
                 )
+                
+                debug_logs.append(f"Meeting {meeting_id}: Stored {num_chunks} chunks")
                 
                 if num_chunks > 0:
                     successful += 1
                     logger.info(f"✅ Indexed meeting {meeting_id}: {num_chunks} chunks")
                 else:
                     logger.warning(f"⚠️ Meeting {meeting_id} indexed but produced 0 chunks")
+                    # If 0 chunks but no error, we count it as processed but maybe not "successful" in terms of vectors?
+                    # Let's count it as successful but 0 chunks.
                 
                 count += 1
                 
@@ -1729,14 +1803,32 @@ async def reindex_all():
                 
             except Exception as e:
                 failed += 1
-                logger.error(f"❌ Failed to index meeting {meeting_id}: {e}")
+                error_msg = f"Failed to index {meeting_id}: {str(e)}"
+                logger.error(f"❌ {error_msg}")
+                errors.append(error_msg)
+                debug_logs.append(f"ERROR {meeting_id}: {str(e)}")
                 continue  # Continue with next meeting even if one fails
             
-        return {"status": "success", "indexed_count": count}
+        return {
+            "status": "success", 
+            "indexed_count": count, 
+            "successful": successful, 
+            "failed": failed, 
+            "skipped": skipped,
+            "total_meetings": len(meetings),
+            "errors": errors,
+            "debug_logs": debug_logs
+        }
         
+    except HTTPException as he:
+        raise he
     except Exception as e:
         logger.error(f"Re-indexing failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return {
+            "status": "error",
+            "error": str(e),
+            "debug_logs": debug_logs
+        }
 
 
 @app.on_event("shutdown")

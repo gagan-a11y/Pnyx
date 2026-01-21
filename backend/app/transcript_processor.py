@@ -144,19 +144,32 @@ class TranscriptProcessor:
                 llm = OpenAIModel(model_name, provider=OpenAIProvider(api_key=api_key))
                 logger.info(f"Using OpenAI model: {model_name}")
             # --- END OPENAI SUPPORT ---
-            # NOTE: Gemini is not supported via pydantic-ai Agent for structured output.
-            # Use Groq/Claude/OpenAI for meeting summarization. Gemini works for streaming chat.
+            # --- GEMINI SUPPORT ---
+            elif model == "gemini":
+                api_key = await db.get_api_key("gemini", user_email=user_email)
+                if not api_key:
+                    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+                if not api_key: raise ValueError("Gemini API key not found")
+                
+                import google.generativeai as genai
+                genai.configure(api_key=api_key)
+                # Use gemini-2.0-flash for speed and large context
+                model_name = model_name or "gemini-2.0-flash"
+                llm = genai.GenerativeModel(model_name)
+                logger.info(f"Using Gemini model: {model_name}")
+            # --- END GEMINI SUPPORT ---
             else:
                 logger.error(f"Unsupported model provider requested: {model}")
                 raise ValueError(f"Unsupported model provider: {model}")
 
-            # Initialize the agent with the selected LLM
-            agent = Agent(
-                llm,
-                result_type=SummaryResponse,
-                result_retries=2,
-            )
-            logger.info("Pydantic-AI Agent initialized.")
+            # Initialize the agent with the selected LLM (for non-Gemini models)
+            if model != "gemini":
+                agent = Agent(
+                    llm,
+                    result_type=SummaryResponse,
+                    result_retries=2,
+                )
+                logger.info(f"Pydantic-AI Agent initialized for {model}.")
 
             # Split transcript into chunks
             step = chunk_size - overlap
@@ -172,8 +185,37 @@ class TranscriptProcessor:
             for i, chunk in enumerate(chunks):
                 logger.info(f"Processing chunk {i+1}/{num_chunks}...")
                 try:
-                    # Run the agent to get the structured summary for the chunk
-                    if model != "ollama":
+                    # Run the agent or Gemini to get the structured summary for the chunk
+                    if model == "gemini":
+                        prompt = f"""Given the following meeting transcript chunk, extract the relevant information according to the required JSON structure.
+                        
+                        IMPORTANT: 
+                        1. Return ONLY valid JSON. No markdown formatting, no code blocks.
+                        2. Block types must be one of: 'text', 'bullet', 'heading1', 'heading2'
+                        3. Sections: MeetingName, People, SessionSummary, CriticalDeadlines, KeyItemsDecisions, ImmediateActionItems, NextSteps, MeetingNotes.
+                        
+                        Transcript Chunk:
+                        ---
+                        {chunk}
+                        ---
+                        
+                        Context:
+                        ---
+                        {custom_prompt}
+                        ---
+                        """
+                        
+                        # Use Gemini for structured output
+                        response = await llm.generate_content_async(
+                            prompt,
+                            generation_config={"response_mime_type": "application/json"}
+                        )
+                        chunk_summary_json = response.text
+                        all_json_data.append(chunk_summary_json)
+                        logger.info(f"Successfully generated Gemini summary for chunk {i+1}.")
+                        continue
+
+                    elif model != "ollama":
                         summary_result = await agent.run(
                             f"""Given the following meeting transcript chunk, extract the relevant information according to the required JSON structure. If a specific section (like Critical Deadlines) has no relevant information in this chunk, return an empty list for its 'blocks'. Ensure the output is only the JSON data.
 

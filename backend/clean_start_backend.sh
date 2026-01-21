@@ -1,3 +1,4 @@
+
 #!/bin/bash
 
 # Exit on error
@@ -245,7 +246,7 @@ else
 fi
 
 cd "$PACKAGE_NAME" || handle_error "Failed to change to whisper-server directory"
-./run-server.sh --model "models/$MODEL_NAME" --host "0.0.0.0" --port $WHISPER_PORT --language $LANGUAGE &
+./run-server.sh --model "models/$MODEL_NAME" --host "0.0.0.0" --port $WHISPER_PORT --language $LANGUAGE > ../whisper_server.log 2>&1 &
 WHISPER_PID=$!
 cd .. || handle_error "Failed to return to root directory"
 

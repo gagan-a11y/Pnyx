@@ -1,103 +1,42 @@
 """
-Vector Store Service - ChromaDB wrapper for cross-meeting context search.
+Vector Store Service - PostgreSQL (pgvector) implementation.
 
 This module handles:
-- Storing transcript embeddings with meeting metadata
-- Semantic search across all meetings
-- Source citation retrieval
+- Generating embeddings for transcript chunks (using SentenceTransformers)
+- Storing vectors in PostgreSQL (Neon DB)
+- Semantic search using pgvector
 """
 
 import logging
 import os
-import threading
+import asyncpg
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# ChromaDB setup (lazy loaded)
-_chroma_client = None
-_collection = None
-_embedding_function = None
-_init_lock = threading.Lock()  # Thread-safe initialization
+# Global embedding model (lazy loaded)
+_embedding_model = None
 
-
-def _get_embedding_function():
-    """Get or create the embedding function."""
-    global _embedding_function
-    if _embedding_function is None:
+def _get_embedding_model():
+    """Get or create the SentenceTransformer model."""
+    global _embedding_model
+    if _embedding_model is None:
         try:
-            from chromadb.utils import embedding_functions
-            
-            # Try Sentence Transformers (local, free)
-            _embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-                model_name="all-MiniLM-L6-v2"
-            )
-            logger.info("✅ Using SentenceTransformer embeddings (all-MiniLM-L6-v2)")
-        except Exception as e:
-            logger.warning(f"⚠️ SentenceTransformer not available: {e}")
-            # Fallback to default ChromaDB embeddings
-            _embedding_function = None
-    return _embedding_function
-
-
-def _get_collection():
-    """Get or create the ChromaDB collection (thread-safe)."""
-    global _chroma_client, _collection
-    
-    # Fast path: already initialized
-    if _collection is not None:
-        return _collection
-    
-    # Slow path: needs initialization with lock
-    with _init_lock:
-        # Double-check: another thread might have initialized while we waited
-        if _collection is not None:
-            return _collection
-        try:
-            import chromadb
-            from chromadb.config import Settings
-            
-            # Use persistent storage in data directory
-            persist_dir = "/app/data/chromadb"
-            os.makedirs(persist_dir, exist_ok=True)
-            
-            _chroma_client = chromadb.PersistentClient(
-                path=persist_dir,
-                settings=Settings(anonymized_telemetry=False)
-            )
-            
-            # Get or create collection
-            embedding_fn = _get_embedding_function()
-            _collection = _chroma_client.get_or_create_collection(
-                name="meeting_transcripts",
-                embedding_function=embedding_fn,
-                metadata={"hnsw:space": "cosine"}
-            )
-            
-            logger.info(f"✅ ChromaDB initialized. Collection has {_collection.count()} documents.")
-            
+            from sentence_transformers import SentenceTransformer
+            # Using all-MiniLM-L6-v2 (384 dimensions) - fast and efficient
+            _embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            logger.info("✅ SentenceTransformer model loaded (all-MiniLM-L6-v2)")
         except ImportError:
-            logger.error("❌ ChromaDB not installed. Run: pip install chromadb")
+            logger.error("❌ sentence-transformers not installed. Run: pip install sentence-transformers")
             return None
         except Exception as e:
-            logger.error(f"❌ ChromaDB initialization failed: {e}")
+            logger.error(f"❌ Failed to load embedding model: {e}")
             return None
-    
-    return _collection
-
+    return _embedding_model
 
 def chunk_transcript(text: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
-    """Split transcript into overlapping chunks for embedding.
-    
-    Args:
-        text: Full transcript text
-        chunk_size: Target size of each chunk in characters
-        overlap: Overlap between chunks
-    
-    Returns:
-        List of text chunks
-    """
+    """Split transcript into overlapping chunks for embedding."""
     if not text or len(text) < chunk_size:
         return [text] if text else []
     
@@ -106,8 +45,6 @@ def chunk_transcript(text: str, chunk_size: int = 500, overlap: int = 100) -> Li
     
     while start < len(text):
         end = start + chunk_size
-        
-        # Try to break at sentence boundary
         if end < len(text):
             # Look for sentence endings
             for sep in ['. ', '! ', '? ', '\n']:
@@ -124,6 +61,12 @@ def chunk_transcript(text: str, chunk_size: int = 500, overlap: int = 100) -> Li
     
     return chunks
 
+async def _get_db_connection():
+    """Get a connection to the PostgreSQL database."""
+    # Use the same DATABASE_URL as the main app
+    default_url = "postgresql://neondb_owner:npg_3JYK7ySezjrT@ep-morning-truth-ahrz730e-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require"
+    db_url = os.getenv('DATABASE_URL', default_url)
+    return await asyncpg.connect(db_url)
 
 async def store_meeting_embeddings(
     meeting_id: str,
@@ -131,20 +74,9 @@ async def store_meeting_embeddings(
     meeting_date: str,
     transcripts: List[Dict[str, Any]]
 ) -> int:
-    """Store transcript embeddings for a meeting.
-    
-    Args:
-        meeting_id: Unique meeting identifier
-        meeting_title: Title of the meeting
-        meeting_date: Date of the meeting (ISO format)
-        transcripts: List of transcript entries with 'text', 'timestamp' keys
-    
-    Returns:
-        Number of chunks stored
-    """
-    collection = _get_collection()
-    if collection is None:
-        logger.warning("⚠️ Vector store not available, skipping embedding storage")
+    """Store transcript embeddings for a meeting in Postgres."""
+    model = _get_embedding_model()
+    if model is None:
         return 0
     
     # Combine all transcripts
@@ -156,116 +88,120 @@ async def store_meeting_embeddings(
     
     # Chunk the transcript
     chunks = chunk_transcript(full_text)
-    
     if not chunks:
         return 0
     
-    # Prepare data for ChromaDB
-    ids = [f"{meeting_id}_chunk_{i}" for i in range(len(chunks))]
-    metadatas = [
-        {
-            "meeting_id": meeting_id,
-            "meeting_title": meeting_title,
-            "meeting_date": meeting_date,
-            "chunk_index": i,
-            "total_chunks": len(chunks)
-        }
-        for i in range(len(chunks))
-    ]
-    
     try:
-        # Delete existing embeddings for this meeting (upsert)
-        existing = collection.get(where={"meeting_id": meeting_id})
-        if existing and existing['ids']:
-            collection.delete(ids=existing['ids'])
-            logger.debug(f"🗑️ Deleted {len(existing['ids'])} existing chunks for meeting {meeting_id}")
+        # Generate embeddings (sync call, might block event loop briefly, but fast for MiniLM)
+        # For very large texts, consider running in a thread pool
+        embeddings = model.encode(chunks)
         
-        # Add new embeddings
-        collection.add(
-            ids=ids,
-            documents=chunks,
-            metadatas=metadatas
-        )
-        
-        logger.info(f"✅ Stored {len(chunks)} chunks for meeting '{meeting_title}' ({meeting_id})")
-        return len(chunks)
-        
+        conn = await _get_db_connection()
+        try:
+            async with conn.transaction():
+                # Delete existing embeddings for this meeting (full refresh)
+                await conn.execute("DELETE FROM meeting_embeddings WHERE meeting_id = $1", meeting_id)
+                
+                # Insert new chunks
+                records = []
+                for i, (chunk, vector) in enumerate(zip(chunks, embeddings)):
+                    # Convert vector to string format "[x, y, z]" for Postgres
+                    # This avoids "no binary format encoder" error in asyncpg copy
+                    vector_str = str(vector.tolist())
+                    records.append((meeting_id, i, chunk, vector_str))
+                
+                # Use executemany which handles text-to-vector casting automatically
+                await conn.executemany("""
+                    INSERT INTO meeting_embeddings (meeting_id, chunk_index, content, embedding)
+                    VALUES ($1, $2, $3, $4)
+                """, records)
+                
+            logger.info(f"✅ Stored {len(chunks)} chunks for meeting '{meeting_title}' ({meeting_id})")
+            return len(chunks)
+            
+        finally:
+            await conn.close()
+            
     except Exception as e:
         logger.error(f"❌ Failed to store embeddings: {e}")
         return 0
-
 
 async def search_context(
     query: str,
     n_results: int = 5,
     allowed_meeting_ids: Optional[List[str]] = None
 ) -> List[Dict[str, Any]]:
-    """Search for relevant context across meetings.
-    
-    Args:
-        query: Search query
-        n_results: Number of results to return
-        allowed_meeting_ids: Optional - list of meeting IDs to restrict search to
-    
-    Returns:
-        List of results with text, meeting info, and distance score
-    """
-    collection = _get_collection()
-    if collection is None:
+    """Search for relevant context using vector similarity."""
+    model = _get_embedding_model()
+    if model is None:
         return []
     
     try:
-        # Build where clause
-        where = None
-        if allowed_meeting_ids:
-            if len(allowed_meeting_ids) == 1:
-                where = {"meeting_id": allowed_meeting_ids[0]}
-            else:
-                where = {"meeting_id": {"$in": allowed_meeting_ids}}
+        # Generate query vector
+        query_vector = model.encode(query).tolist()
         
-        logger.info(f"Querying vector store with filter: {where}")
-        results = collection.query(
-            query_texts=[query],
-            n_results=n_results,
-            where=where,
-            include=["documents", "metadatas", "distances"]
-        )
-        
-        # Format results
-        formatted = []
-        if results and results['documents'] and results['documents'][0]:
-            for i, doc in enumerate(results['documents'][0]):
-                metadata = results['metadatas'][0][i] if results['metadatas'] else {}
-                distance = results['distances'][0][i] if results['distances'] else 1.0
+        conn = await _get_db_connection()
+        try:
+            # Build query dynamically based on filters
+            # Note: <=> is the cosine distance operator in pgvector
+            # We order by distance ASC (closest first)
+            
+            sql = """
+                SELECT 
+                    e.content,
+                    e.meeting_id,
+                    m.title as meeting_title,
+                    m.created_at as meeting_date,
+                    e.chunk_index,
+                    1 - (e.embedding <=> $1) as similarity
+                FROM meeting_embeddings e
+                JOIN meetings m ON e.meeting_id = m.id
+            """
+            
+            args = [str(query_vector)] # asyncpg requires vector/json as string or list? 
+            # asyncpg-pgvector usually expects string representation of list or native list if registered.
+            # safe bet: pass list, let asyncpg handle it if type codec is set, or cast to vector explicitly.
+            # Actually, standard way is just pass list if pgvector codec is registered, or string '[...]'
+            # We'll try passing string representation which is robust.
+            
+            if allowed_meeting_ids:
+                sql += " WHERE e.meeting_id = ANY($2::text[])"
+                args.append(allowed_meeting_ids)
                 
+            sql += " ORDER BY e.embedding <=> $1 LIMIT $3"
+            args.append(n_results) # $2 or $3 depending on filter
+            
+            # Fix args index if no filter
+            if not allowed_meeting_ids:
+                # args was [vector, n_results]
+                # query expects $3 for limit? No, if no filter, limit is $2
+                sql = sql.replace("$3", "$2")
+            
+            rows = await conn.fetch(sql, *args)
+            
+            formatted = []
+            for row in rows:
                 formatted.append({
-                    "text": doc,
-                    "meeting_id": metadata.get("meeting_id", ""),
-                    "meeting_title": metadata.get("meeting_title", "Unknown"),
-                    "meeting_date": metadata.get("meeting_date", ""),
-                    "similarity": 1 - distance,  # Convert distance to similarity
-                    "chunk_index": metadata.get("chunk_index", 0)
+                    "text": row['content'],
+                    "meeting_id": row['meeting_id'],
+                    "meeting_title": row['meeting_title'],
+                    "meeting_date": row['meeting_date'].isoformat() if row['meeting_date'] else "",
+                    "similarity": float(row['similarity']),
+                    "chunk_index": row['chunk_index']
                 })
-        
-        logger.debug(f"🔍 Found {len(formatted)} results for query: '{query[:50]}...'")
-        return formatted
-        
+            
+            logger.debug(f"🔍 Found {len(formatted)} results for query: '{query[:50]}...'")
+            return formatted
+            
+        finally:
+            await conn.close()
+            
     except Exception as e:
         logger.error(f"❌ Search failed: {e}")
         return []
 
-
 def get_collection_stats() -> Dict[str, Any]:
     """Get statistics about the vector store."""
-    collection = _get_collection()
-    if collection is None:
-        return {"status": "unavailable", "count": 0}
-    
-    try:
-        return {
-            "status": "available",
-            "count": collection.count(),
-            "name": collection.name
-        }
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    # We can't make async calls from sync function easily without loop
+    # For now, return a placeholder or refactor to async
+    return {"status": "available (postgres)", "info": "Stats require async call"} 

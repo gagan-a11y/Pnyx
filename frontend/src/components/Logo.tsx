@@ -1,8 +1,6 @@
 import React from "react";
 import Image from "next/image";
-import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "./ui/dialog";
-import { VisuallyHidden } from "./ui/visually-hidden";
-import { About } from "./About";
+import Link from "next/link";
 
 interface LogoProps {
     isCollapsed: boolean;
@@ -10,27 +8,17 @@ interface LogoProps {
 
 const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(({ isCollapsed }, ref) => {
   return (
-    <Dialog aria-describedby={undefined}>
+    <Link href="/" className="cursor-pointer hover:opacity-80 transition-opacity">
       {isCollapsed ? (
-        <DialogTrigger asChild>
-          <button ref={ref} className="flex items-center justify-start mb-2 cursor-pointer bg-transparent border-none p-0 hover:opacity-80 transition-opacity">
-            <Image src="/logo-collapsed.png" alt="Logo" width={40} height={32} />
-          </button>
-        </DialogTrigger>
+        <div className="flex items-center justify-start mb-2">
+          <Image src="/logo-collapsed.png" alt="Logo" width={40} height={32} />
+        </div>
       ) : (
-        <DialogTrigger asChild>
-          <span className="text-lg text-center border rounded-full bg-blue-50 border-white font-semibold text-gray-700 mb-2 block items-center cursor-pointer hover:opacity-80 transition-opacity">
-            <span>Pnyx</span>
-          </span>
-        </DialogTrigger>
+        <span className="text-lg text-center border rounded-full bg-blue-50 border-white font-semibold text-gray-700 mb-2 block items-center">
+          <span>Pnyx</span>
+        </span>
       )}
-      <DialogContent>
-        <VisuallyHidden>
-          <DialogTitle>About Pnyx</DialogTitle>
-        </VisuallyHidden>
-        <About />
-      </DialogContent>
-    </Dialog>
+    </Link>
   );
 });
 
